@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VWAP Mean Reversion Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg0: #0a0e17; --bg1: #111827; --bg2: #151d2e; --bg3: #1a2340;
+    --border: #1e2a42; --border-active: #2563eb;
+    --t1: #e2e8f0; --t2: #8492a6; --t3: #4a5568;
+    --cyan: #06b6d4; --blue: #3b82f6; --yellow: #eab308;
+    --green: #22c55e; --red: #ef4444; --neutral: #64748b;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg0); color:var(--t1); font-family:'IBM Plex Sans',sans-serif; height:100vh; overflow:hidden; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+
+  /* Controls */
+  .controls {
+    display:flex; align-items:center; gap:14px; padding:6px 14px;
+    background:var(--bg1); border-bottom:1px solid var(--border); height:44px;
+    overflow-x:auto; flex-wrap:nowrap;
+  }
+  .logo { font-size:14px; font-weight:700; color:var(--cyan); white-space:nowrap; }
+  .logo span { color:var(--t3); font-weight:400; }
+  .sep { width:1px; height:22px; background:var(--border); flex-shrink:0; }
+  .ctrl { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .ctrl-label { font-size:10px; color:var(--t3); text-transform:uppercase; letter-spacing:.5px; }
+  .ctrl-val { font-size:13px; font-weight:600; color:var(--cyan); min-width:28px; }
+
+  input[type=range] { -webkit-appearance:none; height:4px; background:var(--border); border-radius:2px; outline:none; width:90px; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; background:var(--cyan); border-radius:50%; cursor:pointer; }
+
+  .btn-group { display:flex; }
+  .btn {
+    padding:3px 10px; border:1px solid var(--border); background:var(--bg2); color:var(--t1);
+    font-size:11px; cursor:pointer; transition:all .15s;
+  }
+  .btn:first-child { border-radius:4px 0 0 4px; }
+  .btn:last-child { border-radius:0 4px 4px 0; }
+  .btn:not(:first-child) { margin-left:-1px; }
+  .btn.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .btn:hover:not(.on) { background:var(--bg3); }
+
+  .legend { margin-left:auto; display:flex; gap:12px; font-size:10px; color:var(--t3); align-items:center; flex-shrink:0; }
+  .legend i { width:14px; height:2px; border-radius:1px; display:inline-block; vertical-align:middle; margin-right:3px; }
+
+  /* Grid */
+  .grid {
+    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
+    gap:2px; height:calc(100vh - 44px); background:var(--border);
+  }
+  .cell { background:var(--bg0); display:flex; flex-direction:column; position:relative; overflow:hidden; }
+
+  /* Cell header */
+  .cell-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:4px 10px; background:var(--bg1); border-bottom:1px solid var(--border); height:34px; flex-shrink:0;
+  }
+  .sym-input {
+    width:55px; text-align:center; text-transform:uppercase; font-weight:700;
+    background:var(--bg2); color:var(--t1); border:1px solid var(--border);
+    padding:2px 4px; border-radius:3px; font-size:13px; outline:none;
+  }
+  .sym-input:focus { border-color:var(--cyan); }
+  .price-info { display:flex; align-items:center; gap:10px; font-size:12px; }
+  .price-main { font-weight:700; font-size:14px; }
+
+  /* Dev badge */
+  .dev-badge {
+    position:absolute; top:42px; right:10px; z-index:10;
+    padding:4px 10px; border-radius:6px; font-size:16px; font-weight:700;
+    backdrop-filter:blur(8px); border:1px solid; text-align:center; line-height:1.2;
+  }
+  .dev-badge small { font-size:8px; font-weight:500; display:block; opacity:.8; letter-spacing:.5px; }
+  .dev-long { background:rgba(34,197,94,.12); color:var(--green); border-color:rgba(34,197,94,.3); }
+  .dev-short { background:rgba(239,68,68,.12); color:var(--red); border-color:rgba(239,68,68,.3); }
+  .dev-neutral { background:rgba(100,116,139,.12); color:var(--neutral); border-color:rgba(100,116,139,.3); }
+
+  /* Chart area */
+  .chart-wrap { flex:1; min-height:0; }
+
+  /* Metrics bar */
+  .metrics {
+    display:flex; align-items:center; gap:14px; padding:4px 10px;
+    background:var(--bg2); border-top:1px solid var(--border); height:28px; flex-shrink:0;
+    font-size:11px;
+  }
+  .metrics .ml { color:var(--t3); }
+  .metrics .mv { font-weight:600; }
+
+  /* Animations */
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .dot { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:4px; }
+  .dot-live { background:var(--green); animation:pulse 2s infinite; }
+  .dot-sample { background:var(--yellow); }
+</style>
+</head>
+<body>
+
+<!-- CONTROLS -->
+<div class="controls mono">
+  <div class="logo">VWAP<span>.MR</span></div>
+  <div class="sep"></div>
+
+  <div class="ctrl">
+    <span class="ctrl-label">K</span>
+    <input type="range" id="k-range" min="1.0" max="3.0" step="0.1" value="2.0">
+    <span class="ctrl-val" id="k-val">2.0</span>
+  </div>
+  <div class="sep"></div>
+
+  <div class="ctrl">
+    <span class="ctrl-label">Refresh</span>
+    <div class="btn-group" id="ref-btns">
+      <button class="btn" data-v="5">5s</button>
+      <button class="btn on" data-v="15">15s</button>
+      <button class="btn" data-v="30">30s</button>
+    </div>
+  </div>
+  <div class="sep"></div>
+
+  <div class="ctrl">
+    <span class="ctrl-label">TF</span>
+    <div class="btn-group" id="tf-btns">
+      <button class="btn" data-v="1">1m</button>
+      <button class="btn on" data-v="5">5m</button>
+      <button class="btn" data-v="15">15m</button>
+    </div>
+  </div>
+  <div class="sep"></div>
+
+  <div class="ctrl">
+    <span class="ctrl-label">Source</span>
+    <div class="btn-group" id="src-btns">
+      <button class="btn on" data-v="sample">Sample</button>
+      <button class="btn" data-v="live">Live</button>
+    </div>
+  </div>
+  <div class="sep"></div>
+
+  <div class="ctrl">
+    <span class="ctrl-label">ATR</span>
+    <span class="ctrl-val">14</span>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:#eab308"></i>VWAP</span>
+    <span><i style="background:#ef4444"></i>Upper</span>
+    <span><i style="background:#22c55e"></i>Lower</span>
+  </div>
+</div>
+
+<!-- 2x2 GRID -->
+<div class="grid">
+  <div class="cell" id="c0"></div>
+  <div class="cell" id="c1"></div>
+  <div class="cell" id="c2"></div>
+  <div class="cell" id="c3"></div>
+</div>
+
+<script>
+// ======== CONFIG ========
+const CFG = {
+  symbols: ['ACB','VCB','HPG','FPT'],
+  k: 2.0, tf: 5, refresh: 15, source: 'sample', atrPeriod: 14,
+  api: 'https://iboard-api.ssi.com.vn/statistics/charts/history',
+};
+
+// ======== REALISTIC SAMPLE DATA ========
+// Generate proper VN trading session timestamps
+function vnTradingTimestamps(dateStr, resolution) {
+  // dateStr: "2026-03-05"
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const baseDate = new Date(y, m-1, d);
+  const times = [];
+
+  // Morning: 9:15 - 11:30 (135 minutes)
+  for (let min = 0; min < 135; min += resolution) {
+    const totalMin = 9*60 + 15 + min;
+    const h = Math.floor(totalMin / 60);
+    const mm = totalMin % 60;
+    const dt = new Date(y, m-1, d, h, mm, 0);
+    times.push(Math.floor(dt.getTime() / 1000));
+  }
+
+  // Afternoon: 13:00 - 14:30 (90 minutes)
+  for (let min = 0; min < 90; min += resolution) {
+    const totalMin = 13*60 + min;
+    const h = Math.floor(totalMin / 60);
+    const mm = totalMin % 60;
+    const dt = new Date(y, m-1, d, h, mm, 0);
+    times.push(Math.floor(dt.getTime() / 1000));
+  }
+
+  return times;
+}
+
+function roundTick(p, tk) { return Math.round(p / tk) * tk; }
+
+function genSample(symbol) {
+  const bases = {ACB:23.5, VCB:85, HPG:28, FPT:120};
+  const ticks = {ACB:0.05, VCB:0.1, HPG:0.05, FPT:0.1};
+  const bp = bases[symbol]||25, tk = ticks[symbol]||0.05;
+
+  const dates = ['2026-03-04','2026-03-05','2026-03-06'];
+  const candles = [];
+  let price = bp * (0.98 + Math.random()*0.04); // slight random start
+
+  // Seed random per symbol for consistency
+  let seed = 0;
+  for (let i = 0; i < symbol.length; i++) seed += symbol.charCodeAt(i);
+  const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return seed / 2147483647; };
+
+  for (const dateStr of dates) {
+    const times = vnTradingTimestamps(dateStr, 1); // 1m resolution
+    const totalCandles = times.length;
+
+    for (let i = 0; i < totalCandles; i++) {
+      const pct = i / totalCandles;
+      // Volatility pattern
+      let vol = 0.8;
+      if (pct < 0.07) vol = 2.5;       // ATO area
+      else if (pct < 0.2) vol = 1.5;    // settling
+      else if (pct > 0.58 && pct < 0.62) vol = 1.8; // afternoon open
+      else if (pct > 0.92) vol = 1.6;   // near close
+      else vol = 0.6 + rand()*0.4;
+
+      const baseVol = price * 0.001 * vol;
+      const drift = (rand() - 0.502) * baseVol;
+      const spread = baseVol * (0.3 + rand()*0.6);
+
+      const o = price;
+      const c = roundTick(o + drift, tk);
+      const h = roundTick(Math.max(o,c) + spread * rand(), tk);
+      const l = roundTick(Math.min(o,c) - spread * rand(), tk);
+
+      let vBase = 35000;
+      if (pct < 0.05) vBase = 250000;
+      else if (pct > 0.58 && pct < 0.62) vBase = 180000;
+      else if (pct > 0.93) vBase = 160000;
+      else vBase = 20000 + rand()*50000;
+
+      candles.push({
+        time: times[i],
+        open: +o.toFixed(2), high: +h.toFixed(2),
+        low: +l.toFixed(2), close: +c.toFixed(2),
+        volume: Math.round(vBase*(0.4+rand()))
+      });
+      price = c;
+    }
+    // overnight gap
+    price += (rand()-0.5)*tk*6;
+    price = roundTick(price, tk);
+  }
+  return candles;
+}
+
+// ======== DATA PROCESSING ========
+function agg(data, tf) {
+  if (tf===1) return data.map(c=>({...c}));
+  const bk={};
+  for (const c of data) {
+    const bt = Math.floor(c.time/(tf*60))*(tf*60);
+    if (!bk[bt]) bk[bt]={time:bt, open:c.open, high:c.high, low:c.low, close:c.close, volume:c.volume};
+    else { const b=bk[bt]; b.high=Math.max(b.high,c.high); b.low=Math.min(b.low,c.low); b.close=c.close; b.volume+=c.volume; }
+  }
+  return Object.values(bk).sort((a,b)=>a.time-b.time);
+}
+
+function calcVWAP(data1m) {
+  let cumTPV=0, cumV=0;
+  return data1m.map((c,i)=>{
+    // Reset on new day (gap > 6 hours)
+    if (i>0 && c.time-data1m[i-1].time > 21600) { cumTPV=0; cumV=0; }
+    const tp=(c.high+c.low+c.close)/3;
+    cumTPV+=tp*c.volume; cumV+=c.volume;
+    return {time:c.time, value: cumV>0 ? cumTPV/cumV : c.close};
+  });
+}
+
+function sampleVWAPtoTF(vwap1m, tfCandles, tf) {
+  // For each TF candle, get the last VWAP value within that candle's time range
+  return tfCandles.map(c => {
+    let val = c.close;
+    for (const v of vwap1m) {
+      if (v.time >= c.time && v.time < c.time + tf*60) val = v.value;
+    }
+    return {time: c.time, value: +val.toFixed(4)};
+  });
+}
+
+function calcATR(candles, period) {
+  const alpha = 2/(period+1);
+  let atr = null;
+  return candles.map((c,i)=>{
+    let tr;
+    if (i===0) { tr=c.high-c.low; atr=tr; }
+    else {
+      const pc = candles[i-1].close;
+      const gap = c.time - candles[i-1].time;
+      tr = gap > 5400 ? (c.high-c.low) : Math.max(c.high-c.low, Math.abs(c.high-pc), Math.abs(c.low-pc));
+      atr = alpha*tr + (1-alpha)*atr;
+    }
+    return {time:c.time, value:atr};
+  });
+}
+
+function processData(raw1m, tf, k, atrP) {
+  const vwap1m = calcVWAP(raw1m);
+  const tfC = agg(raw1m, tf);
+  const vwapTF = sampleVWAPtoTF(vwap1m, tfC, tf);
+  const atrTF = calcATR(tfC, atrP);
+
+  const candles = [], vwapLine = [], upperLine = [], lowerLine = [], volData = [];
+  let lastDev=0, lastVwap=0, lastAtr=0, lastPrice=0, lastUpper=0, lastLower=0, totalVol=0;
+
+  for (let i=0; i<tfC.length; i++) {
+    const c = tfC[i];
+    const v = vwapTF[i].value;
+    const a = atrTF[i].value;
+    const up = +(v + k*a).toFixed(2);
+    const lo = +(v - k*a).toFixed(2);
+    const dev = a>0 ? (c.close-v)/a : 0;
+
+    candles.push({time:c.time, open:c.open, high:c.high, low:c.low, close:c.close});
+    vwapLine.push({time:c.time, value:+v.toFixed(2)});
+    upperLine.push({time:c.time, value:up});
+    lowerLine.push({time:c.time, value:lo});
+    volData.push({time:c.time, value:c.volume, color: c.close>=c.open ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'});
+
+    lastDev=dev; lastVwap=v; lastAtr=a; lastPrice=c.close; lastUpper=up; lastLower=lo;
+    totalVol+=c.volume;
+  }
+
+  return {candles, vwapLine, upperLine, lowerLine, volData, metrics:{dev:lastDev, vwap:lastVwap, atr:lastAtr, price:lastPrice, upper:lastUpper, lower:lastLower, vol:totalVol}};
+}
+
+// ======== API FETCH ========
+async function fetchSSI(symbol, from, to) {
+  try {
+    const r = await fetch(`${CFG.api}?resolution=1&symbol=${symbol}&from=${from}&to=${to}`);
+    const j = await r.json();
+    if (j.code!=='SUCCESS'||!j.data?.t) return null;
+    const d=j.data;
+    return d.t.map((t,i)=>({time:t, open:d.o[i], high:d.h[i], low:d.l[i], close:d.c[i], volume:d.v[i]}));
+  } catch(e) { console.warn('API fail:', symbol, e); return null; }
+}
+
+async function fetchLive(symbol) {
+  const now = Math.floor(Date.now()/1000);
+  // 3 days back to ensure we have enough data
+  const from = now - 3*86400;
+  return await fetchSSI(symbol, from, now);
+}
+
+// ======== CHART PANEL ========
+class Panel {
+  constructor(cellId, symbol, idx) {
+    this.sym = symbol;
+    this.idx = idx;
+    this.raw1m = [];
+    this.cell = document.getElementById(cellId);
+    this.chart = null;
+    this.candleS = null; this.vwapS = null; this.upperS = null; this.lowerS = null; this.volS = null;
+    this.build();
+  }
+
+  build() {
+    this.cell.innerHTML = `
+      <div class="cell-head mono">
+        <div style="display:flex;align-items:center;gap:8px">
+          <input class="sym-input mono" value="${this.sym}" maxlength="6" id="sym-${this.idx}">
+          <span class="dot dot-sample" id="dot-${this.idx}"></span>
+        </div>
+        <div class="price-info mono">
+          <span class="price-main" id="pr-${this.idx}" style="color:var(--neutral)">--</span>
+          <span id="ch-${this.idx}" style="font-size:11px;color:var(--t3)">--</span>
+        </div>
+      </div>
+      <div class="chart-wrap" id="cw-${this.idx}"></div>
+      <div class="dev-badge dev-neutral mono" id="db-${this.idx}"><small>DEV</small>0.0</div>
+      <div class="metrics mono">
+        <span><span class="ml">VWAP </span><span class="mv" style="color:var(--yellow)" id="mv-${this.idx}">--</span></span>
+        <span><span class="ml">ATR </span><span class="mv" style="color:var(--cyan)" id="ma-${this.idx}">--</span></span>
+        <span><span class="ml">Vol </span><span class="mv" id="mvo-${this.idx}">--</span></span>
+        <span><span class="ml">Band </span><span class="mv" style="color:var(--t2)" id="mb-${this.idx}">--</span></span>
+      </div>`;
+
+    const inp = document.getElementById(`sym-${this.idx}`);
+    inp.addEventListener('change', ()=>{ this.sym=inp.value.toUpperCase(); inp.value=this.sym; this.load(); });
+
+    this.createChart();
+  }
+
+  createChart() {
+    const el = document.getElementById(`cw-${this.idx}`);
+    this.chart = LightweightCharts.createChart(el, {
+      layout:{ background:{color:'#0a0e17'}, textColor:'#4a5568', fontSize:10, fontFamily:'JetBrains Mono' },
+      grid:{ vertLines:{color:'rgba(30,42,66,0.4)'}, horzLines:{color:'rgba(30,42,66,0.4)'} },
+      crosshair:{ mode:LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale:{ borderColor:'#1e2a42', scaleMargins:{top:0.08,bottom:0.18} },
+      timeScale:{ borderColor:'#1e2a42', timeVisible:true, secondsVisible:false, rightOffset:3 },
+      localization:{ timeFormatter: t => {
+        const d = new Date(t*1000);
+        return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+      }},
+    });
+
+    this.candleS = this.chart.addCandlestickSeries({
+      upColor:'#22c55e', downColor:'#ef4444',
+      borderUpColor:'#22c55e', borderDownColor:'#ef4444',
+      wickUpColor:'#22c55e', wickDownColor:'#ef4444',
+    });
+
+    this.volS = this.chart.addHistogramSeries({
+      priceFormat:{type:'volume'}, priceScaleId:'vol',
+    });
+    this.chart.priceScale('vol').applyOptions({scaleMargins:{top:0.85,bottom:0}});
+
+    this.vwapS = this.chart.addLineSeries({color:'#eab308', lineWidth:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+    this.upperS = this.chart.addLineSeries({color:'rgba(239,68,68,0.6)', lineWidth:1, lineStyle:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+    this.lowerS = this.chart.addLineSeries({color:'rgba(34,197,94,0.6)', lineWidth:1, lineStyle:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+
+    new ResizeObserver(()=>{
+      this.chart.applyOptions({width:el.clientWidth, height:el.clientHeight});
+    }).observe(el);
+  }
+
+  async load() {
+    if (CFG.source==='live') {
+      const data = await fetchLive(this.sym);
+      this.raw1m = data && data.length ? data : genSample(this.sym);
+    } else {
+      this.raw1m = genSample(this.sym);
+    }
+    this.render();
+  }
+
+  render() {
+    if (!this.raw1m.length) return;
+    const {candles, vwapLine, upperLine, lowerLine, volData, metrics} = processData(this.raw1m, CFG.tf, CFG.k, CFG.atrPeriod);
+
+    this.candleS.setData(candles);
+    this.vwapS.setData(vwapLine);
+    this.upperS.setData(upperLine);
+    this.lowerS.setData(lowerLine);
+    this.volS.setData(volData);
+
+    const m = metrics;
+    const prEl = document.getElementById(`pr-${this.idx}`);
+    const chEl = document.getElementById(`ch-${this.idx}`);
+    const pctChange = m.vwap ? ((m.price - m.vwap)/m.vwap*100) : 0;
+    const col = pctChange > 0 ? 'var(--green)' : pctChange < 0 ? 'var(--red)' : 'var(--neutral)';
+
+    prEl.textContent = m.price.toFixed(2);
+    prEl.style.color = col;
+    chEl.textContent = (pctChange>=0?'+':'') + pctChange.toFixed(2) + '%';
+    chEl.style.color = col;
+
+    document.getElementById(`mv-${this.idx}`).textContent = m.vwap.toFixed(2);
+    document.getElementById(`ma-${this.idx}`).textContent = m.atr.toFixed(3);
+    document.getElementById(`mvo-${this.idx}`).textContent = m.vol>1e6?(m.vol/1e6).toFixed(1)+'M':(m.vol/1e3).toFixed(0)+'K';
+    document.getElementById(`mb-${this.idx}`).textContent = m.lower.toFixed(2)+'–'+m.upper.toFixed(2);
+
+    // Dev badge
+    const db = document.getElementById(`db-${this.idx}`);
+    const dev = m.dev;
+    let zone='NEUTRAL', cls='dev-neutral';
+    if (dev <= -CFG.k) { zone='LONG ZONE'; cls='dev-long'; }
+    else if (dev >= CFG.k) { zone='SHORT ZONE'; cls='dev-short'; }
+    db.className = 'dev-badge mono '+cls;
+    db.innerHTML = `<small>${zone}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
+
+    // Status dot
+    const dot = document.getElementById(`dot-${this.idx}`);
+    dot.className = 'dot ' + (CFG.source==='live'?'dot-live':'dot-sample');
+
+    this.chart.timeScale().fitContent();
+  }
+
+  destroy() { if(this.chart){this.chart.remove(); this.chart=null;} }
+}
+
+// ======== DASHBOARD ========
+const panels = [];
+let refreshTimer = null;
+
+function initPanels() {
+  for (let i=0;i<4;i++) {
+    panels.push(new Panel('c'+i, CFG.symbols[i], i));
+  }
+  loadAll();
+}
+
+async function loadAll() {
+  // Sequential with small delay to respect rate limit
+  for (const p of panels) {
+    await p.load();
+    if (CFG.source==='live') await new Promise(r=>setTimeout(r,1100)); // rate limit 1req/s
+  }
+}
+
+function renderAll() { panels.forEach(p=>p.render()); }
+
+function startRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(()=>loadAll(), CFG.refresh*1000);
+}
+
+// ======== CONTROLS ========
+function setupBtnGroup(id, cb) {
+  document.getElementById(id).addEventListener('click', e=>{
+    if (!e.target.classList.contains('btn')) return;
+    document.getElementById(id).querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));
+    e.target.classList.add('on');
+    cb(e.target.dataset.v);
+  });
+}
+
+document.getElementById('k-range').addEventListener('input', e=>{
+  CFG.k = parseFloat(e.target.value);
+  document.getElementById('k-val').textContent = CFG.k.toFixed(1);
+  renderAll();
+});
+
+setupBtnGroup('ref-btns', v=>{ CFG.refresh=parseInt(v); startRefresh(); });
+setupBtnGroup('tf-btns', v=>{ CFG.tf=parseInt(v); renderAll(); });
+setupBtnGroup('src-btns', v=>{ CFG.source=v; loadAll(); });
+
+// ======== INIT ========
+if (typeof LightweightCharts==='undefined') {
+  document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace;color:#8492a6;text-align:center"><div><h2 style="color:#06b6d4">VWAP.MR</h2><p>Không load được Lightweight Charts.<br>Cần internet để tải thư viện.</p></div></div>';
+} else {
+  initPanels();
+  startRefresh();
+}
+</script>
+</body>
+</html>
