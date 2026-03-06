@@ -72,42 +72,11 @@
 
 <div class="controls mono">
   <div class="logo">VWAP<span>.MR</span></div><div class="sep"></div>
-
-  <div class="ctrl">
-    <span class="ctrl-label">K</span>
-    <input type="range" id="k-range" min="1.0" max="3.0" step="0.1" value="2.0">
-    <span class="ctrl-val" id="k-val">2.0</span>
-  </div><div class="sep"></div>
-
-  <div class="ctrl">
-    <span class="ctrl-label">ATR</span>
-    <input type="range" id="atr-range" min="7" max="28" step="1" value="14">
-    <span class="ctrl-val" id="atr-val">14</span>
-  </div><div class="sep"></div>
-
-  <div class="ctrl">
-    <span class="ctrl-label">Refresh</span>
-    <div class="btn-group" id="ref-btns">
-      <button class="btn" data-v="5">5s</button>
-      <button class="btn on" data-v="15">15s</button>
-      <button class="btn" data-v="30">30s</button>
-    </div>
-  </div><div class="sep"></div>
-
-  <div class="ctrl">
-    <span class="ctrl-label">Nến</span>
-    <div class="btn-group" id="tf-btns">
-      <button class="btn" data-v="1">1m</button>
-      <button class="btn on" data-v="5">5m</button>
-      <button class="btn" data-v="15">15m</button>
-    </div>
-  </div>
-
-  <div class="legend">
-    <span><i style="background:#facc15"></i>VWAP</span>
-    <span><i style="background:#f87171"></i>Upper</span>
-    <span><i style="background:#34d399"></i>Lower</span>
-  </div>
+  <div class="ctrl"><span class="ctrl-label">K</span><input type="range" id="k-range" min="1.0" max="3.0" step="0.1" value="2.0"><span class="ctrl-val" id="k-val">2.0</span></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">ATR</span><input type="range" id="atr-range" min="7" max="28" step="1" value="14"><span class="ctrl-val" id="atr-val">14</span></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">Refresh</span><div class="btn-group" id="ref-btns"><button class="btn" data-v="5">5s</button><button class="btn on" data-v="15">15s</button><button class="btn" data-v="30">30s</button></div></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">Nến</span><div class="btn-group" id="tf-btns"><button class="btn" data-v="1">1m</button><button class="btn on" data-v="5">5m</button><button class="btn" data-v="15">15m</button></div></div>
+  <div class="legend"><span><i style="background:#facc15"></i>VWAP</span><span><i style="background:#f87171"></i>Upper</span><span><i style="background:#34d399"></i>Lower</span></div>
 </div>
 
 <div class="grid"><div class="cell" id="c0"></div><div class="cell" id="c1"></div><div class="cell" id="c2"></div><div class="cell" id="c3"></div></div>
@@ -117,6 +86,16 @@ const VN_OFFSET=7*3600;
 const DEFAULT_PROXY='https://proxy.nhathuynh1293.workers.dev';
 const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
 
+// ======== HELPERS ========
+// Get start of today (UTC day that matches VN today)
+function getTodayStartUTC(){
+  const now=new Date();
+  // VN time = UTC+7
+  const vnNow=new Date(now.getTime()+VN_OFFSET*1000);
+  // Start of VN today in UTC terms, then shifted for chart display
+  return Date.UTC(vnNow.getUTCFullYear(),vnNow.getUTCMonth(),vnNow.getUTCDate(),0,0,0)/1000;
+}
+
 // ======== DATA ENGINE ========
 function agg(d,tf){
   if(tf===1)return d.map(c=>({...c}));
@@ -124,27 +103,59 @@ function agg(d,tf){
   for(const c of d){const bt=Math.floor(c.time/(tf*60))*(tf*60);if(!bk[bt])bk[bt]={time:bt,open:c.open,high:c.high,low:c.low,close:c.close,volume:c.volume};else{const b=bk[bt];b.high=Math.max(b.high,c.high);b.low=Math.min(b.low,c.low);b.close=c.close;b.volume+=c.volume;}}
   return Object.values(bk).sort((a,b)=>a.time-b.time);
 }
+
 function calcVWAP(d){
   let cv=0,ct=0;
-  return d.map((c,i)=>{if(i>0&&c.time-d[i-1].time>21600){cv=0;ct=0;}const tp=(c.high+c.low+c.close)/3;ct+=tp*c.volume;cv+=c.volume;return{time:c.time,value:cv>0?ct/cv:c.close};});
+  return d.map((c,i)=>{
+    // Reset on new day: compare UTC day
+    const curDay=Math.floor(c.time/86400);
+    const prevDay=i>0?Math.floor(d[i-1].time/86400):-1;
+    if(i>0&&curDay!==prevDay){cv=0;ct=0;}
+    const tp=(c.high+c.low+c.close)/3;
+    ct+=tp*c.volume;cv+=c.volume;
+    return{time:c.time,value:cv>0?ct/cv:c.close};
+  });
 }
+
 function smpVWAP(v1m,tfc,tf){
   return tfc.map(c=>{let val=c.close;for(const v of v1m){if(v.time>=c.time&&v.time<c.time+tf*60)val=v.value;}return{time:c.time,value:+val.toFixed(4)};});
 }
+
 function calcATR(d,p){
   const a=2/(p+1);let atr=null;
   return d.map((c,i)=>{let tr;if(i===0){tr=c.high-c.low;atr=tr;}else{const pc=d[i-1].close,gap=c.time-d[i-1].time;tr=gap>5400?(c.high-c.low):Math.max(c.high-c.low,Math.abs(c.high-pc),Math.abs(c.low-pc));atr=a*tr+(1-a)*atr;}return{time:c.time,value:atr};});
 }
+
 function process(raw,tf,k,ap){
   const v1=calcVWAP(raw),tc=agg(raw,tf),vt=smpVWAP(v1,tc,tf),at=calcATR(tc,ap);
-  const cd=[],vl=[],ul=[],ll=[],vd=[];let ld=0,lv=0,la=0,lp=0,lu=0,lo=0,tv=0;
+  const todayStart=getTodayStartUTC();
+
+  const cd=[],vl=[],ul=[],ll=[],vd=[];
+  let ld=0,lv=0,la=0,lp=0,lu=0,lo=0,tv=0;
+
   for(let i=0;i<tc.length;i++){
-    const c=tc[i],v=vt[i].value,a=at[i].value,up=+(v+k*a).toFixed(2),dn=+(v-k*a).toFixed(2),dev=a>0?(c.close-v)/a:0;
+    const c=tc[i],v=vt[i].value,a=at[i].value;
+    const up=+(v+k*a).toFixed(2),dn=+(v-k*a).toFixed(2),dev=a>0?(c.close-v)/a:0;
+    const isToday=c.time>=todayStart;
+
+    // Candles: all days
     cd.push({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close});
-    vl.push({time:c.time,value:+v.toFixed(2)});ul.push({time:c.time,value:up});ll.push({time:c.time,value:dn});
+
+    // Volume: all days
     vd.push({time:c.time,value:c.volume,color:c.close>=c.open?'rgba(52,211,153,0.35)':'rgba(248,113,113,0.35)'});
-    ld=dev;lv=v;la=a;lp=c.close;lu=up;lo=dn;tv+=c.volume;
+
+    // VWAP + Bands: only today
+    if(isToday){
+      vl.push({time:c.time,value:+v.toFixed(2)});
+      ul.push({time:c.time,value:up});
+      ll.push({time:c.time,value:dn});
+    }
+
+    // Metrics always from latest
+    ld=dev;lv=v;la=a;lp=c.close;lu=up;lo=dn;
+    if(isToday) tv+=c.volume;
   }
+
   return{candles:cd,vwapLine:vl,upperLine:ul,lowerLine:ll,volData:vd,m:{dev:ld,vwap:lv,atr:la,price:lp,upper:lu,lower:lo,vol:tv}};
 }
 
@@ -165,20 +176,25 @@ async function fetchLive(sym){const now=Math.floor(Date.now()/1000);return await
 // ======== WARNING ========
 function showWarn(){document.getElementById('warn').classList.add('show');}
 function hideWarn(){document.getElementById('warn').classList.remove('show');}
-document.getElementById('proxy-save').addEventListener('click',()=>{
-  const v=document.getElementById('proxy-input').value.trim();if(!v)return;
-  CFG.proxy=(v.startsWith('http')?v:'https://'+v);localStorage.setItem('ssi-proxy',CFG.proxy);fetchOK=true;hideWarn();loadAll();
-});
+document.getElementById('proxy-save').addEventListener('click',()=>{const v=document.getElementById('proxy-input').value.trim();if(!v)return;CFG.proxy=(v.startsWith('http')?v:'https://'+v);localStorage.setItem('ssi-proxy',CFG.proxy);fetchOK=true;hideWarn();loadAll();});
 document.getElementById('warn-close').addEventListener('click',hideWarn);
 
 // ======== CHART PANEL ========
 class Panel{
-  constructor(cid,sym,idx){this.sym=sym;this.idx=idx;this.raw=[];this.cell=document.getElementById(cid);this.ch=null;this.cs=null;this.vs=null;this.ws=null;this.us=null;this.ls=null;this.build();}
+  constructor(cid,sym,idx){
+    this.sym=sym;this.idx=idx;this.raw=[];
+    this.cell=document.getElementById(cid);
+    this.ch=null;this.cs=null;this.vs=null;this.ws=null;this.us=null;this.ls=null;
+    this.initialized=false; // Track first load for zoom
+    this.build();
+  }
+
   build(){
     this.cell.innerHTML=`<div class="cell-head mono"><div style="display:flex;align-items:center;gap:8px"><input class="sym-input mono" value="${this.sym}" maxlength="6" id="si-${this.idx}"><span class="dot dot-live" id="dt-${this.idx}"></span></div><div class="price-info mono"><span class="price-main" id="pr-${this.idx}" style="color:var(--neutral)">—</span><span id="pc-${this.idx}" style="font-size:12px;color:var(--t3)"></span></div></div><div class="chart-wrap" id="cw-${this.idx}"></div><div class="dev-badge dev-neutral mono" id="db-${this.idx}"><small>DEV</small>—</div><div class="metrics mono"><span><span class="ml">VWAP </span><span class="mv" style="color:var(--yellow)" id="mv-${this.idx}">—</span></span><span><span class="ml">ATR </span><span class="mv" style="color:var(--cyan)" id="ma-${this.idx}">—</span></span><span><span class="ml">Vol </span><span class="mv" id="mV-${this.idx}">—</span></span><span><span class="ml">Band </span><span class="mv" style="color:var(--t2)" id="mb-${this.idx}">—</span></span></div>`;
-    document.getElementById(`si-${this.idx}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.load();});
+    document.getElementById(`si-${this.idx}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.initialized=false;this.load();});
     this.mkChart();
   }
+
   mkChart(){
     const el=document.getElementById(`cw-${this.idx}`);
     this.ch=LightweightCharts.createChart(el,{
@@ -197,50 +213,72 @@ class Panel{
     this.ls=this.ch.addLineSeries({color:'rgba(52,211,153,0.7)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
     new ResizeObserver(()=>{this.ch.applyOptions({width:el.clientWidth,height:el.clientHeight});}).observe(el);
   }
+
   async load(){
     const data=await fetchLive(this.sym);
     if(data&&data.length){this.raw=data;document.getElementById(`dt-${this.idx}`).className='dot dot-live';}
     else{document.getElementById(`dt-${this.idx}`).className='dot dot-err';}
     this.render();
   }
+
   render(){
     if(!this.raw.length)return;
     const{candles,vwapLine,upperLine,lowerLine,volData,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
-    this.cs.setData(candles);this.ws.setData(vwapLine);this.us.setData(upperLine);this.ls.setData(lowerLine);this.vs.setData(volData);
+
+    // Always setData for candles/volume (all days)
+    this.cs.setData(candles);
+    this.vs.setData(volData);
+
+    // VWAP + bands (today only)
+    this.ws.setData(vwapLine);
+    this.us.setData(upperLine);
+    this.ls.setData(lowerLine);
+
+    // Metrics
     const pct=m.vwap?((m.price-m.vwap)/m.vwap*100):0;
     const col=pct>0?'var(--green)':pct<0?'var(--red)':'var(--neutral)';
-    document.getElementById(`pr-${this.idx}`).textContent=m.price.toFixed(2);document.getElementById(`pr-${this.idx}`).style.color=col;
-    document.getElementById(`pc-${this.idx}`).textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';document.getElementById(`pc-${this.idx}`).style.color=col;
+    document.getElementById(`pr-${this.idx}`).textContent=m.price.toFixed(2);
+    document.getElementById(`pr-${this.idx}`).style.color=col;
+    document.getElementById(`pc-${this.idx}`).textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
+    document.getElementById(`pc-${this.idx}`).style.color=col;
     document.getElementById(`mv-${this.idx}`).textContent=m.vwap.toFixed(2);
     document.getElementById(`ma-${this.idx}`).textContent=m.atr.toFixed(3);
     document.getElementById(`mV-${this.idx}`).textContent=m.vol>1e6?(m.vol/1e6).toFixed(1)+'M':(m.vol/1e3).toFixed(0)+'K';
     document.getElementById(`mb-${this.idx}`).textContent=m.lower.toFixed(2)+' – '+m.upper.toFixed(2);
+
     const db=document.getElementById(`db-${this.idx}`),dev=m.dev;
-    let z='NEUTRAL',dc='dev-neutral';if(dev<=-CFG.k){z='LONG ZONE';dc='dev-long';}else if(dev>=CFG.k){z='SHORT ZONE';dc='dev-short';}
-    db.className='dev-badge mono '+dc;db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
-    const todayCount=Math.min(candles.length,Math.ceil(225/CFG.tf)+5);
-    this.ch.timeScale().setVisibleLogicalRange({from:candles.length-todayCount,to:candles.length+3});
+    let z='NEUTRAL',dc='dev-neutral';
+    if(dev<=-CFG.k){z='LONG ZONE';dc='dev-long';}
+    else if(dev>=CFG.k){z='SHORT ZONE';dc='dev-short';}
+    db.className='dev-badge mono '+dc;
+    db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
+
+    // Zoom: only set on FIRST load, then leave user's zoom alone
+    if(!this.initialized&&candles.length>0){
+      this.initialized=true;
+      // Zoom to show today's candles + a few from yesterday for context
+      const todayStart=getTodayStartUTC();
+      let todayIdx=candles.findIndex(c=>c.time>=todayStart);
+      if(todayIdx<0) todayIdx=Math.max(0,candles.length-50);
+      // Show a few candles before today for gap context
+      const fromIdx=Math.max(0,todayIdx-10);
+      this.ch.timeScale().setVisibleLogicalRange({from:fromIdx,to:candles.length+3});
+    }
   }
 }
 
 // ======== DASHBOARD ========
 const panels=[];let rTimer=null;
 async function loadAll(){for(const p of panels){await p.load();await new Promise(r=>setTimeout(r,1100));}}
-function renderAll(){panels.forEach(p=>p.render());}
+function renderAll(){panels.forEach(p=>{p.initialized=false;p.render();});}
 function startRefresh(){if(rTimer)clearInterval(rTimer);rTimer=setInterval(()=>loadAll(),CFG.refresh*1000);}
 
 function setupBG(id,cb){document.getElementById(id).addEventListener('click',e=>{if(!e.target.classList.contains('btn'))return;document.getElementById(id).querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));e.target.classList.add('on');cb(e.target.dataset.v);});}
-
-// K slider
-document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat(e.target.value);document.getElementById('k-val').textContent=CFG.k.toFixed(1);renderAll();});
-
-// ATR slider
-document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;renderAll();});
-
+document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat(e.target.value);document.getElementById('k-val').textContent=CFG.k.toFixed(1);panels.forEach(p=>p.render());});
+document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;panels.forEach(p=>p.render());});
 setupBG('ref-btns',v=>{CFG.refresh=parseInt(v);startRefresh();});
 setupBG('tf-btns',v=>{CFG.tf=parseInt(v);renderAll();});
 
-// ======== INIT ========
 if(typeof LightweightCharts==='undefined'){
   document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace;color:#94a3b8"><div><h2 style="color:#22d3ee">VWAP.MR</h2><p>Không load được chart library. Cần internet.</p></div></div>';
 }else{
