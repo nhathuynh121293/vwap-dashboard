@@ -40,14 +40,23 @@
   .sym-input:focus{border-color:var(--cyan);box-shadow:0 0 4px rgba(34,211,238,.2);}
   .price-info{display:flex;align-items:center;gap:12px;font-size:13px;}
   .price-main{font-weight:700;font-size:15px;}
-  .dev-badge{position:absolute;top:44px;right:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);}
+  /* DEV badge — no longer absolute, removed from chart overlay */
+  .dev-badge{position:absolute;top:44px;right:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);transition:opacity .3s;}
   .dev-badge small{font-size:9px;font-weight:600;display:block;opacity:.8;letter-spacing:.8px;margin-bottom:1px;}
   .dev-long{background:rgba(52,211,153,.1);color:var(--green);border-color:rgba(52,211,153,.25);}
   .dev-short{background:rgba(248,113,113,.1);color:var(--red);border-color:rgba(248,113,113,.25);}
   .dev-neutral{background:rgba(148,163,184,.08);color:var(--neutral);border-color:rgba(148,163,184,.15);}
+  .dev-badge.dimmed{opacity:.2;}
   .chart-wrap{flex:1;min-height:0;}
-  .metrics{display:flex;align-items:center;gap:16px;padding:5px 12px;background:var(--bg1);border-top:1px solid var(--border);height:30px;flex-shrink:0;font-size:11.5px;letter-spacing:.2px;}
+  /* metrics bar — single row, extended */
+  .metrics{display:flex;align-items:center;gap:12px;padding:5px 12px;background:var(--bg1);border-top:1px solid var(--border);height:30px;flex-shrink:0;font-size:11px;letter-spacing:.2px;overflow:hidden;}
   .metrics .ml{color:var(--t3);}.metrics .mv{font-weight:600;}
+  .msep{width:1px;height:16px;background:var(--border);flex-shrink:0;margin:0 2px;}
+  /* regime badge inside metrics bar */
+  .regime-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;padding:1px 6px;border-radius:3px;border:1px solid;}
+  .regime-ranging{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07);}
+  .regime-trending{color:var(--red);border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.07);}
+  .regime-uncertain{color:var(--neutral);border-color:rgba(148,163,184,.2);background:rgba(148,163,184,.05);}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
   .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px;}
   .dot-live{background:var(--green);animation:pulse 2s infinite;box-shadow:0 0 4px rgba(52,211,153,.4);}
@@ -87,13 +96,114 @@ const DEFAULT_PROXY='https://proxy.nhathuynh1293.workers.dev';
 const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
 
 // ======== HELPERS ========
-// Get start of today (UTC day that matches VN today)
 function getTodayStartUTC(){
   const now=new Date();
-  // VN time = UTC+7
   const vnNow=new Date(now.getTime()+VN_OFFSET*1000);
-  // Start of VN today in UTC terms, then shifted for chart display
   return Date.UTC(vnNow.getUTCFullYear(),vnNow.getUTCMonth(),vnNow.getUTCDate(),0,0,0)/1000;
+}
+
+function fmtVol(v){
+  if(!v||v<=0) return '—';
+  if(v>=1e6) return (v/1e6).toFixed(1)+'M';
+  if(v>=1e3) return (v/1e3).toFixed(0)+'K';
+  return v.toString();
+}
+
+// ======== REGIME INDICATORS ========
+
+// Efficiency Ratio (Kaufman) — window = last 20 tf-candles
+// ER near 0 = choppy/ranging, ER near 1 = trending
+function calcER(candles, period=20){
+  const n=candles.length;
+  if(n<period+1) return null;
+  const i=n-1;
+  const direction=Math.abs(candles[i].close - candles[i-period].close);
+  let noise=0;
+  for(let j=i-period+1;j<=i;j++) noise+=Math.abs(candles[j].close - candles[j-1].close);
+  return noise>0 ? +(direction/noise).toFixed(3) : 0;
+}
+
+// ADX — Wilder smoothing, period = 14
+// ADX < 25 = no trend, ADX > 25 = trending
+function calcADX(candles, period=14){
+  const n=candles.length;
+  if(n<period*2+1) return null;
+
+  let sTR=0, sPDM=0, sNDM=0;
+  // Seed: sum first `period` values
+  for(let i=1;i<=period;i++){
+    const c=candles[i],p=candles[i-1];
+    const tr=Math.max(c.high-c.low, Math.abs(c.high-p.close), Math.abs(c.low-p.close));
+    const up=c.high-p.high, dn=p.low-c.low;
+    sTR+=tr;
+    sPDM+=(up>dn&&up>0)?up:0;
+    sNDM+=(dn>up&&dn>0)?dn:0;
+  }
+
+  // Wilder smooth remainder, collect DX for initial ADX seed
+  let dxBuf=[], adx=null;
+  for(let i=period+1;i<n;i++){
+    const c=candles[i],p=candles[i-1];
+    const tr=Math.max(c.high-c.low, Math.abs(c.high-p.close), Math.abs(c.low-p.close));
+    const up=c.high-p.high, dn=p.low-c.low;
+    sTR =sTR -sTR /period+tr;
+    sPDM=sPDM-sPDM/period+((up>dn&&up>0)?up:0);
+    sNDM=sNDM-sNDM/period+((dn>up&&dn>0)?dn:0);
+    const pDI=sTR>0?100*sPDM/sTR:0;
+    const nDI=sTR>0?100*sNDM/sTR:0;
+    const diSum=pDI+nDI;
+    const dx=diSum>0?100*Math.abs(pDI-nDI)/diSum:0;
+    if(adx===null){
+      dxBuf.push(dx);
+      if(dxBuf.length===period){
+        adx=dxBuf.reduce((a,b)=>a+b,0)/period;
+      }
+    } else {
+      adx=adx-adx/period+dx;
+    }
+  }
+  return adx!==null ? +adx.toFixed(1) : null;
+}
+
+// VWAP Cross Frequency — count price crosses over VWAP today only
+// Higher = price is oscillating around VWAP = good MR environment
+function calcXF(tc, todayStart){
+  let xf=0, prevSide=null;
+  for(const c of tc){
+    if(c.time<todayStart) continue;
+    if(c._vwap===undefined) continue;
+    const side=c.close>c._vwap?1:-1;
+    if(prevSide!==null&&side!==prevSide) xf++;
+    prevSide=side;
+  }
+  return xf;
+}
+
+// Regime: RANGING / TRENDING / UNCERTAIN
+function getRegime(er, adx){
+  if(er===null||adx===null) return 'UNCERTAIN';
+  if(er<0.3&&adx<25) return 'RANGING';
+  if(er>0.6&&adx>25) return 'TRENDING';
+  return 'UNCERTAIN';
+}
+
+// Color helpers — green=good for MR, red=bad, yellow=borderline
+function erColor(er){
+  if(er===null) return 'var(--t3)';
+  if(er<0.3) return 'var(--green)';
+  if(er<0.6) return 'var(--yellow)';
+  return 'var(--red)';
+}
+function adxColor(adx){
+  if(adx===null) return 'var(--t3)';
+  if(adx<25) return 'var(--green)';
+  if(adx<35) return 'var(--yellow)';
+  return 'var(--red)';
+}
+function xfColor(xf){
+  if(xf>=3) return 'var(--green)';
+  if(xf>=1) return 'var(--yellow)';
+  return 'var(--t3)';
 }
 
 // ======== DATA ENGINE ========
@@ -107,7 +217,6 @@ function agg(d,tf){
 function calcVWAP(d){
   let cv=0,ct=0;
   return d.map((c,i)=>{
-    // Reset on new day: compare UTC day
     const curDay=Math.floor(c.time/86400);
     const prevDay=i>0?Math.floor(d[i-1].time/86400):-1;
     if(i>0&&curDay!==prevDay){cv=0;ct=0;}
@@ -132,31 +241,43 @@ function process(raw,tf,k,ap){
 
   const cd=[],vl=[],ul=[],ll=[],vd=[];
   let ld=0,lv=0,la=0,lp=0,lu=0,lo=0,tv=0;
+  let prevSide=null, xf=0;
 
   for(let i=0;i<tc.length;i++){
     const c=tc[i],v=vt[i].value,a=at[i].value;
     const up=+(v+k*a).toFixed(2),dn=+(v-k*a).toFixed(2),dev=a>0?(c.close-v)/a:0;
     const isToday=c.time>=todayStart;
 
-    // Candles: all days
     cd.push({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close});
-
-    // Volume: all days
     vd.push({time:c.time,value:c.volume,color:c.close>=c.open?'rgba(52,211,153,0.35)':'rgba(248,113,113,0.35)'});
 
-    // VWAP + Bands: only today
+    // Attach vwap value for XF calculation
+    tc[i]._vwap=v;
+
     if(isToday){
       vl.push({time:c.time,value:+v.toFixed(2)});
       ul.push({time:c.time,value:up});
       ll.push({time:c.time,value:dn});
+      tv+=c.volume;
+
+      // VWAP cross frequency
+      const side=c.close>v?1:-1;
+      if(prevSide!==null&&side!==prevSide) xf++;
+      prevSide=side;
     }
 
-    // Metrics always from latest
     ld=dev;lv=v;la=a;lp=c.close;lu=up;lo=dn;
-    if(isToday) tv+=c.volume;
   }
 
-  return{candles:cd,vwapLine:vl,upperLine:ul,lowerLine:ll,volData:vd,m:{dev:ld,vwap:lv,atr:la,price:lp,upper:lu,lower:lo,vol:tv}};
+  // Regime indicators — use all tf candles (spans multiple days, enough data)
+  const er=calcER(tc,20);
+  const adx=calcADX(tc,ap);
+  const regime=getRegime(er,adx);
+
+  return{
+    candles:cd,vwapLine:vl,upperLine:ul,lowerLine:ll,volData:vd,
+    m:{dev:ld,vwap:lv,atr:la,price:lp,upper:lu,lower:lo,vol:tv,er,adx,xf,regime}
+  };
 }
 
 // ======== API ========
@@ -185,13 +306,37 @@ class Panel{
     this.sym=sym;this.idx=idx;this.raw=[];
     this.cell=document.getElementById(cid);
     this.ch=null;this.cs=null;this.vs=null;this.ws=null;this.us=null;this.ls=null;
-    this.initialized=false; // Track first load for zoom
+    this.initialized=false;
     this.build();
   }
 
   build(){
-    this.cell.innerHTML=`<div class="cell-head mono"><div style="display:flex;align-items:center;gap:8px"><input class="sym-input mono" value="${this.sym}" maxlength="6" id="si-${this.idx}"><span class="dot dot-live" id="dt-${this.idx}"></span></div><div class="price-info mono"><span class="price-main" id="pr-${this.idx}" style="color:var(--neutral)">—</span><span id="pc-${this.idx}" style="font-size:12px;color:var(--t3)"></span></div></div><div class="chart-wrap" id="cw-${this.idx}"></div><div class="dev-badge dev-neutral mono" id="db-${this.idx}"><small>DEV</small>—</div><div class="metrics mono"><span><span class="ml">VWAP </span><span class="mv" style="color:var(--yellow)" id="mv-${this.idx}">—</span></span><span><span class="ml">ATR </span><span class="mv" style="color:var(--cyan)" id="ma-${this.idx}">—</span></span><span><span class="ml">Vol </span><span class="mv" id="mV-${this.idx}">—</span></span><span><span class="ml">Band </span><span class="mv" style="color:var(--t2)" id="mb-${this.idx}">—</span></span></div>`;
-    document.getElementById(`si-${this.idx}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.initialized=false;this.load();});
+    const i=this.idx;
+    this.cell.innerHTML=`
+<div class="cell-head mono">
+  <div style="display:flex;align-items:center;gap:8px">
+    <input class="sym-input mono" value="${this.sym}" maxlength="6" id="si-${i}">
+    <span class="dot dot-live" id="dt-${i}"></span>
+  </div>
+  <div class="price-info mono">
+    <span class="price-main" id="pr-${i}" style="color:var(--neutral)">—</span>
+    <span id="pc-${i}" style="font-size:12px;color:var(--t3)"></span>
+  </div>
+</div>
+<div class="chart-wrap" id="cw-${i}"></div>
+<div class="dev-badge dev-neutral mono" id="db-${i}"><small>DEV</small>—</div>
+<div class="metrics mono">
+  <span><span class="ml">VWAP </span><span class="mv" style="color:var(--yellow)" id="mv-${i}">—</span></span>
+  <span><span class="ml">ATR </span><span class="mv" style="color:var(--cyan)" id="ma-${i}">—</span></span>
+  <span><span class="ml">Vol </span><span class="mv" id="mV-${i}">—</span></span>
+  <span><span class="ml">Band </span><span class="mv" style="color:var(--t2)" id="mb-${i}">—</span></span>
+  <div class="msep"></div>
+  <span class="regime-lbl regime-uncertain" id="mrg-${i}">—</span>
+  <span><span class="ml">ER </span><span class="mv" id="mer-${i}">—</span></span>
+  <span><span class="ml">ADX </span><span class="mv" id="madx-${i}">—</span></span>
+  <span><span class="ml">XF </span><span class="mv" id="mxf-${i}">—</span></span>
+</div>`;
+    document.getElementById(`si-${i}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.initialized=false;this.load();});
     this.mkChart();
   }
 
@@ -224,43 +369,63 @@ class Panel{
   render(){
     if(!this.raw.length)return;
     const{candles,vwapLine,upperLine,lowerLine,volData,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
+    const i=this.idx;
 
-    // Always setData for candles/volume (all days)
     this.cs.setData(candles);
     this.vs.setData(volData);
-
-    // VWAP + bands (today only)
     this.ws.setData(vwapLine);
     this.us.setData(upperLine);
     this.ls.setData(lowerLine);
 
-    // Metrics
+    // Price header
     const pct=m.vwap?((m.price-m.vwap)/m.vwap*100):0;
     const col=pct>0?'var(--green)':pct<0?'var(--red)':'var(--neutral)';
-    document.getElementById(`pr-${this.idx}`).textContent=m.price.toFixed(2);
-    document.getElementById(`pr-${this.idx}`).style.color=col;
-    document.getElementById(`pc-${this.idx}`).textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
-    document.getElementById(`pc-${this.idx}`).style.color=col;
-    document.getElementById(`mv-${this.idx}`).textContent=m.vwap.toFixed(2);
-    document.getElementById(`ma-${this.idx}`).textContent=m.atr.toFixed(3);
-    document.getElementById(`mV-${this.idx}`).textContent=m.vol>1e6?(m.vol/1e6).toFixed(1)+'M':(m.vol/1e3).toFixed(0)+'K';
-    document.getElementById(`mb-${this.idx}`).textContent=m.lower.toFixed(2)+' – '+m.upper.toFixed(2);
+    document.getElementById(`pr-${i}`).textContent=m.price.toFixed(2);
+    document.getElementById(`pr-${i}`).style.color=col;
+    document.getElementById(`pc-${i}`).textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
+    document.getElementById(`pc-${i}`).style.color=col;
 
-    const db=document.getElementById(`db-${this.idx}`),dev=m.dev;
+    // Metrics bar — left side
+    document.getElementById(`mv-${i}`).textContent=m.vwap.toFixed(2);
+    document.getElementById(`ma-${i}`).textContent=m.atr.toFixed(3);
+    document.getElementById(`mV-${i}`).textContent=fmtVol(m.vol);
+    document.getElementById(`mb-${i}`).textContent=m.lower.toFixed(2)+' – '+m.upper.toFixed(2);
+
+    // Metrics bar — regime section
+    const rgEl=document.getElementById(`mrg-${i}`);
+    rgEl.textContent=m.regime;
+    rgEl.className='regime-lbl '+(
+      m.regime==='RANGING'  ? 'regime-ranging'  :
+      m.regime==='TRENDING' ? 'regime-trending' : 'regime-uncertain'
+    );
+
+    const erEl=document.getElementById(`mer-${i}`);
+    erEl.textContent=m.er!==null?m.er.toFixed(2):'—';
+    erEl.style.color=erColor(m.er);
+
+    const adxEl=document.getElementById(`madx-${i}`);
+    adxEl.textContent=m.adx!==null?m.adx.toFixed(1):'—';
+    adxEl.style.color=adxColor(m.adx);
+
+    const xfEl=document.getElementById(`mxf-${i}`);
+    xfEl.textContent=m.xf;
+    xfEl.style.color=xfColor(m.xf);
+
+    // DEV badge — dim when trending (signal less reliable)
+    const db=document.getElementById(`db-${i}`);
+    const dev=m.dev;
     let z='NEUTRAL',dc='dev-neutral';
     if(dev<=-CFG.k){z='LONG ZONE';dc='dev-long';}
     else if(dev>=CFG.k){z='SHORT ZONE';dc='dev-short';}
-    db.className='dev-badge mono '+dc;
+    db.className='dev-badge mono '+dc+(m.regime==='TRENDING'?' dimmed':'');
     db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
 
-    // Zoom: only set on FIRST load, then leave user's zoom alone
+    // Initial zoom
     if(!this.initialized&&candles.length>0){
       this.initialized=true;
-      // Zoom to show today's candles + a few from yesterday for context
       const todayStart=getTodayStartUTC();
       let todayIdx=candles.findIndex(c=>c.time>=todayStart);
       if(todayIdx<0) todayIdx=Math.max(0,candles.length-50);
-      // Show a few candles before today for gap context
       const fromIdx=Math.max(0,todayIdx-10);
       this.ch.timeScale().setVisibleLogicalRange({from:fromIdx,to:candles.length+3});
     }
