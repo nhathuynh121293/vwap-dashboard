@@ -111,15 +111,18 @@ function fmtVol(v){
 
 // ======== REGIME INDICATORS ========
 
-// VWAP Slope — linear regression with x-axis in MINUTES (TF-independent)
-// Lookback = ~60 minutes of VWAP data from display day
-// slope unit = price change per minute, normalized by ATR
-// |slope/ATR| < 0.01 → flat (SIDEWAYS)
-function calcVWAPSlope(vwapLine, atr){
-  if(!vwapLine.length||!atr||atr<=0) return null;
+// VWAP Slope — linear regression on 1m VWAP (TF-independent)
+// x-axis in real minutes, lookback max 60min, min span 30min
+// slope unit = price change per minute / ATR
+// |slope/ATR| < 0.008 → flat (SIDEWAYS), >= 0.008 → directional
+function calcVWAPSlope(v1mDisplay, atr){
+  if(!v1mDisplay.length||!atr||atr<=0) return null;
+  // Min span check: need at least 30 minutes of data
+  const totalSpan=(v1mDisplay[v1mDisplay.length-1].time - v1mDisplay[0].time)/60;
+  if(totalSpan<30) return null;
   // Select points within last VSLOPE_WINDOW_MIN minutes
-  const cutoff=vwapLine[vwapLine.length-1].time - VSLOPE_WINDOW_MIN*60;
-  const pts=vwapLine.filter(p=>p.time>=cutoff);
+  const cutoff=v1mDisplay[v1mDisplay.length-1].time - VSLOPE_WINDOW_MIN*60;
+  const pts=v1mDisplay.filter(p=>p.time>=cutoff);
   const n=pts.length;
   if(n<3) return null;
   const t0=pts[0].time;
@@ -186,24 +189,22 @@ function calcXF(tc, displayStart){
 }
 
 // Regime: SIDEWAYS / TRENDING / UNCERTAIN
-// Both VSlope and RVOL must agree for definitive regime
+// VSlope is primary signal. RVOL is secondary warning.
 function getRegime(vslope, rvol){
   if(vslope===null) return 'UNCERTAIN';
-  const slopeFlat=Math.abs(vslope)<0.01;
-  const slopeSteep=!slopeFlat;
+  const slopeFlat=Math.abs(vslope)<0.008;
   const rvolHigh=rvol!==null&&rvol>=2.0;
-  const rvolNormal=rvol===null||rvol<2.0;
-  if(slopeFlat&&rvolNormal) return 'SIDEWAYS';
-  if(slopeSteep&&rvolHigh)  return 'TRENDING';
-  return 'UNCERTAIN';
+  if(slopeFlat&&!rvolHigh) return 'SIDEWAYS';  // flat VWAP, normal volume
+  if(!slopeFlat) return 'TRENDING';              // steep VWAP = trending regardless of volume
+  return 'UNCERTAIN';                             // flat VWAP but abnormal volume → watch out
 }
 
 // Color helpers — green = good for MR, red = bad, yellow = borderline
 function vsColor(vs){
   if(vs===null) return 'var(--t3)';
   const a=Math.abs(vs);
-  if(a<0.01) return 'var(--green)';
-  if(a<0.02) return 'var(--yellow)';
+  if(a<0.008) return 'var(--green)';
+  if(a<0.015) return 'var(--yellow)';
   return 'var(--red)';
 }
 function rvolColor(rvol){
@@ -290,7 +291,9 @@ function process(raw,tf,k,ap){
   }
 
   // ---- Regime indicators ----
-  const vslope=calcVWAPSlope(vl,la);
+  // VSlope uses 1m VWAP (TF-independent) filtered to display day
+  const v1mDisplay=v1.filter(p=>p.time>=displayStart);
+  const vslope=calcVWAPSlope(v1mDisplay,la);
   const rvol=calcRVOL(tc,displayStart);
   const regime=getRegime(vslope,rvol);
 
