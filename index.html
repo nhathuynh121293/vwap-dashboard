@@ -41,18 +41,16 @@
   .price-info{display:flex;align-items:center;gap:12px;font-size:13px;}
   .price-main{font-weight:700;font-size:15px;}
   /* DEV badge — top-left of chart */
-  .dev-badge{position:absolute;top:44px;left:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);transition:opacity .3s;}
+  .dev-badge{position:absolute;top:44px;left:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);}
   .dev-badge small{font-size:9px;font-weight:600;display:block;opacity:.8;letter-spacing:.8px;margin-bottom:1px;}
   .dev-long{background:rgba(52,211,153,.1);color:var(--green);border-color:rgba(52,211,153,.25);}
   .dev-short{background:rgba(248,113,113,.1);color:var(--red);border-color:rgba(248,113,113,.25);}
   .dev-neutral{background:rgba(148,163,184,.08);color:var(--neutral);border-color:rgba(148,163,184,.15);}
-  .dev-badge.dimmed{opacity:.2;}
   .chart-wrap{flex:1;min-height:0;}
-  /* metrics bar — single row, extended */
+  /* metrics bar */
   .metrics{display:flex;align-items:center;gap:12px;padding:5px 12px;background:var(--bg1);border-top:1px solid var(--border);height:30px;flex-shrink:0;font-size:11px;letter-spacing:.2px;overflow:hidden;}
   .metrics .ml{color:var(--t3);}.metrics .mv{font-weight:600;}
   .msep{width:1px;height:16px;background:var(--border);flex-shrink:0;margin:0 2px;}
-  /* regime badge inside metrics bar */
   .regime-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;padding:1px 6px;border-radius:3px;border:1px solid;}
   .regime-sideways{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07);}
   .regime-trending{color:var(--red);border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.07);}
@@ -94,6 +92,8 @@
 const VN_OFFSET=7*3600;
 const DEFAULT_PROXY='https://proxy.nhathuynh1293.workers.dev';
 const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
+const RVOL_MAX_DAYS=5; // max previous trading days for RVOL average
+const VSLOPE_WINDOW_MIN=60; // lookback window in minutes for VWAP Slope
 
 // ======== HELPERS ========
 function getTodayStartUTC(){
@@ -111,25 +111,32 @@ function fmtVol(v){
 
 // ======== REGIME INDICATORS ========
 
-// VWAP Slope — linear regression slope of VWAP over last N display-day points,
-// normalized by ATR.  |slope/ATR| < 0.01 → flat (SIDEWAYS)
-function calcVWAPSlope(vwapLine, atr, lookback){
-  lookback=lookback||10;
-  const n=Math.min(vwapLine.length, lookback);
-  if(n<3||!atr||atr<=0) return null;
-  const pts=vwapLine.slice(-n);
+// VWAP Slope — linear regression with x-axis in MINUTES (TF-independent)
+// Lookback = ~60 minutes of VWAP data from display day
+// slope unit = price change per minute, normalized by ATR
+// |slope/ATR| < 0.01 → flat (SIDEWAYS)
+function calcVWAPSlope(vwapLine, atr){
+  if(!vwapLine.length||!atr||atr<=0) return null;
+  // Select points within last VSLOPE_WINDOW_MIN minutes
+  const cutoff=vwapLine[vwapLine.length-1].time - VSLOPE_WINDOW_MIN*60;
+  const pts=vwapLine.filter(p=>p.time>=cutoff);
+  const n=pts.length;
+  if(n<3) return null;
+  const t0=pts[0].time;
   let sx=0,sy=0,sxy=0,sx2=0;
   for(let i=0;i<n;i++){
-    sx+=i; sy+=pts[i].value; sxy+=i*pts[i].value; sx2+=i*i;
+    const x=(pts[i].time-t0)/60; // minutes from first point
+    const y=pts[i].value;
+    sx+=x; sy+=y; sxy+=x*y; sx2+=x*x;
   }
   const denom=n*sx2-sx*sx;
   if(denom===0) return 0;
-  const slope=(n*sxy-sx*sy)/denom;
+  const slope=(n*sxy-sx*sy)/denom; // price per minute
   return +(slope/atr).toFixed(4);
 }
 
 // RVOL — Relative Volume (cumulative, time-of-day matched)
-// Display-day cumVol / avg previous-day cumVol at same elapsed time
+// Display-day cumVol / avg of up to RVOL_MAX_DAYS most recent previous trading days
 // Convention: > 2.0 = abnormal
 function calcRVOL(tc, displayStart){
   const displayCandles=tc.filter(c=>c.time>=displayStart);
@@ -147,11 +154,14 @@ function calcRVOL(tc, displayStart){
     days[dayKey].push(c);
   }
 
+  // Sort day keys descending (most recent first), cap at RVOL_MAX_DAYS
+  const dayKeys=Object.keys(days).map(Number).sort((a,b)=>b-a).slice(0,RVOL_MAX_DAYS);
+
   // Each previous day: sum volume up to same time-of-day
   const prevVols=[];
-  for(const dayCandles of Object.values(days)){
+  for(const dk of dayKeys){
     let vol=0;
-    for(const c of dayCandles){
+    for(const c of days[dk]){
       if((c.time%86400)<=latestTOD) vol+=c.volume;
     }
     if(vol>0) prevVols.push(vol);
@@ -176,12 +186,16 @@ function calcXF(tc, displayStart){
 }
 
 // Regime: SIDEWAYS / TRENDING / UNCERTAIN
+// Both VSlope and RVOL must agree for definitive regime
 function getRegime(vslope, rvol){
   if(vslope===null) return 'UNCERTAIN';
+  const slopeFlat=Math.abs(vslope)<0.01;
+  const slopeSteep=!slopeFlat;
   const rvolHigh=rvol!==null&&rvol>=2.0;
-  if(rvolHigh) return 'TRENDING';
-  if(Math.abs(vslope)<0.01) return 'SIDEWAYS';
-  return 'TRENDING';
+  const rvolNormal=rvol===null||rvol<2.0;
+  if(slopeFlat&&rvolNormal) return 'SIDEWAYS';
+  if(slopeSteep&&rvolHigh)  return 'TRENDING';
+  return 'UNCERTAIN';
 }
 
 // Color helpers — green = good for MR, red = bad, yellow = borderline
@@ -276,7 +290,7 @@ function process(raw,tf,k,ap){
   }
 
   // ---- Regime indicators ----
-  const vslope=calcVWAPSlope(vl,la,10);
+  const vslope=calcVWAPSlope(vl,la);
   const rvol=calcRVOL(tc,displayStart);
   const regime=getRegime(vslope,rvol);
 
@@ -298,7 +312,8 @@ async function fetchSSI(sym,from,to){
     return j.data.t.map((t,i)=>({time:t+VN_OFFSET,open:j.data.o[i],high:j.data.h[i],low:j.data.l[i],close:j.data.c[i],volume:j.data.v[i]}));
   }catch(e){console.warn('API fail:',sym,e);if(fetchOK){fetchOK=false;showWarn();}return null;}
 }
-async function fetchLive(sym){const now=Math.floor(Date.now()/1000);return await fetchSSI(sym,now-3*86400,now);}
+// Fetch 7 calendar days (~5 trading days) for RVOL accuracy
+async function fetchLive(sym){const now=Math.floor(Date.now()/1000);return await fetchSSI(sym,now-7*86400,now);}
 
 // ======== WARNING ========
 function showWarn(){document.getElementById('warn').classList.add('show');}
@@ -313,6 +328,7 @@ class Panel{
     this.cell=document.getElementById(cid);
     this.ch=null;this.cs=null;this.vs=null;this.ws=null;this.us=null;this.ls=null;
     this.initialized=false;
+    this._hasData=false; // track if setData has been called
     this.build();
   }
 
@@ -342,7 +358,13 @@ class Panel{
   <span><span class="ml">RVOL </span><span class="mv" id="mrvol-${i}">—</span></span>
   <span><span class="ml">XF </span><span class="mv" id="mxf-${i}">—</span></span>
 </div>`;
-    document.getElementById(`si-${i}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.initialized=false;this.load();});
+    document.getElementById(`si-${i}`).addEventListener('change',e=>{
+      this.sym=e.target.value.toUpperCase();
+      e.target.value=this.sym;
+      this.initialized=false;
+      this._hasData=false; // force setData on symbol change
+      this.load();
+    });
     this.mkChart();
   }
 
@@ -377,11 +399,29 @@ class Panel{
     const{candles,vwapLine,upperLine,lowerLine,volData,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
     const i=this.idx;
 
-    this.cs.setData(candles);
-    this.vs.setData(volData);
-    this.ws.setData(vwapLine);
-    this.us.setData(upperLine);
-    this.ls.setData(lowerLine);
+    // ---- Incremental update: setData first time, update after ----
+    if(!this._hasData){
+      // First render or after symbol/TF change: full setData
+      this.cs.setData(candles);
+      this.vs.setData(volData);
+      this.ws.setData(vwapLine);
+      this.us.setData(upperLine);
+      this.ls.setData(lowerLine);
+      this._hasData=true;
+    } else {
+      // Subsequent refreshes: update last candle + append new ones
+      // For candlestick + volume: update last, then append any new
+      if(candles.length){
+        const lastCandle=candles[candles.length-1];
+        this.cs.update(lastCandle);
+        const lastVol=volData[volData.length-1];
+        this.vs.update(lastVol);
+      }
+      // For line series: update last point of each
+      if(vwapLine.length) this.ws.update(vwapLine[vwapLine.length-1]);
+      if(upperLine.length) this.us.update(upperLine[upperLine.length-1]);
+      if(lowerLine.length) this.ls.update(lowerLine[lowerLine.length-1]);
+    }
 
     // Price header
     const pct=m.vwap?((m.price-m.vwap)/m.vwap*100):0;
@@ -391,13 +431,13 @@ class Panel{
     document.getElementById(`pc-${i}`).textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
     document.getElementById(`pc-${i}`).style.color=col;
 
-    // Metrics bar — left side
+    // Metrics bar
     document.getElementById(`mv-${i}`).textContent=m.vwap.toFixed(2);
     document.getElementById(`ma-${i}`).textContent=m.atr.toFixed(3);
     document.getElementById(`mV-${i}`).textContent=fmtVol(m.vol);
     document.getElementById(`mb-${i}`).textContent=m.lower.toFixed(2)+' – '+m.upper.toFixed(2);
 
-    // Metrics bar — regime section
+    // Regime
     const rgEl=document.getElementById(`mrg-${i}`);
     rgEl.textContent=m.regime;
     rgEl.className='regime-lbl '+(
@@ -417,13 +457,13 @@ class Panel{
     xfEl.textContent=m.xf;
     xfEl.style.color=xfColor(m.xf);
 
-    // DEV badge — dim when TRENDING (signal less reliable)
+    // DEV badge — no dimming
     const db=document.getElementById(`db-${i}`);
     const dev=m.dev;
     let z='NEUTRAL',dc='dev-neutral';
     if(dev<=-CFG.k){z='LONG ZONE';dc='dev-long';}
     else if(dev>=CFG.k){z='SHORT ZONE';dc='dev-short';}
-    db.className='dev-badge mono '+dc+(m.regime==='TRENDING'?' dimmed':'');
+    db.className='dev-badge mono '+dc;
     db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
 
     // Initial zoom — zoom to display day
@@ -447,12 +487,13 @@ class Panel{
 // ======== DASHBOARD ========
 const panels=[];let rTimer=null;
 async function loadAll(){for(const p of panels){await p.load();await new Promise(r=>setTimeout(r,1100));}}
-function renderAll(){panels.forEach(p=>{p.initialized=false;p.render();});}
+// renderAll forces full setData (for TF/K/ATR changes)
+function renderAll(){panels.forEach(p=>{p.initialized=false;p._hasData=false;p.render();});}
 function startRefresh(){if(rTimer)clearInterval(rTimer);rTimer=setInterval(()=>loadAll(),CFG.refresh*1000);}
 
 function setupBG(id,cb){document.getElementById(id).addEventListener('click',e=>{if(!e.target.classList.contains('btn'))return;document.getElementById(id).querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));e.target.classList.add('on');cb(e.target.dataset.v);});}
-document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat(e.target.value);document.getElementById('k-val').textContent=CFG.k.toFixed(1);panels.forEach(p=>p.render());});
-document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;panels.forEach(p=>p.render());});
+document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat(e.target.value);document.getElementById('k-val').textContent=CFG.k.toFixed(1);renderAll();});
+document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;renderAll();});
 setupBG('ref-btns',v=>{CFG.refresh=parseInt(v);startRefresh();});
 setupBG('tf-btns',v=>{CFG.tf=parseInt(v);renderAll();});
 
