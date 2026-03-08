@@ -119,7 +119,7 @@ function calcVWAPSlope(v1mDisplay, atr){
   if(!v1mDisplay.length||!atr||atr<=0) return null;
   // Min span check: need at least 30 minutes of data
   const totalSpan=(v1mDisplay[v1mDisplay.length-1].time - v1mDisplay[0].time)/60;
-  if(totalSpan<30) return null;
+  if(totalSpan<15) return null;
   // Select points within last VSLOPE_WINDOW_MIN minutes
   const cutoff=v1mDisplay[v1mDisplay.length-1].time - VSLOPE_WINDOW_MIN*60;
   const pts=v1mDisplay.filter(p=>p.time>=cutoff);
