@@ -72,7 +72,7 @@
   .msep{width:1px;height:16px;background:var(--border);flex-shrink:0;margin:0 2px;}
   /* regime badge inside metrics bar */
   .regime-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;padding:1px 6px;border-radius:3px;border:1px solid;}
-  .regime-ranging{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07);}
+  .regime-sideways{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07);}
   .regime-trending{color:var(--red);border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.07);}
   .regime-uncertain{color:var(--neutral);border-color:rgba(148,163,184,.2);background:rgba(148,163,184,.05);}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -104,6 +104,7 @@
   <div class="ctrl"><span class="ctrl-label">Refresh</span><div class="btn-group" id="ref-btns"><button class="btn" data-v="5">5s</button><button class="btn on" data-v="15">15s</button><button class="btn" data-v="30">30s</button></div></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Nến</span><div class="btn-group" id="tf-btns"><button class="btn" data-v="1">1m</button><button class="btn on" data-v="5">5m</button><button class="btn" data-v="15">15m</button></div></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Zones</span><div class="btn-group" id="zone-btns"><button class="btn on" data-v="auto">Auto</button><button class="btn" data-v="1">Z1</button><button class="btn" data-v="3">All</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">Band</span><div class="btn-group" id="band-btns"><button class="btn on" data-v="1">On</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
   <button class="theme-btn" id="theme-toggle" title="Đổi theme">☀</button>
   <div class="legend"><span><i style="background:#facc15"></i>VWAP</span><span><i style="background:#f87171"></i>Upper</span><span><i style="background:#34d399"></i>Lower</span></div>
 </div>
@@ -113,7 +114,7 @@
 <script>
 const VN_OFFSET=7*3600;
 const DEFAULT_PROXY='https://proxy.nhathuynh1293.workers.dev';
-const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,zoneLevel:'auto',proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
+const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,zoneLevel:'auto',bandOn:true,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
 
 // ======== HELPERS ========
 function getTodayStartUTC(){
@@ -276,67 +277,63 @@ async function loadZones(sym){
 }
 
 // ======== REGIME INDICATORS ========
+const RVOL_MAX_DAYS=5;
+const VSLOPE_WINDOW_MIN=60;
 
-// Efficiency Ratio (Kaufman) — window = last 20 tf-candles
-// ER near 0 = choppy/ranging, ER near 1 = trending
-function calcER(candles, period=20){
-  const n=candles.length;
-  if(n<period+1) return null;
-  const i=n-1;
-  const direction=Math.abs(candles[i].close - candles[i-period].close);
-  let noise=0;
-  for(let j=i-period+1;j<=i;j++) noise+=Math.abs(candles[j].close - candles[j-1].close);
-  return noise>0 ? +(direction/noise).toFixed(3) : 0;
+// VWAP Slope — linear regression on 1m VWAP (TF-independent)
+function calcVWAPSlope(v1mDisplay, atr){
+  if(!v1mDisplay.length||!atr||atr<=0) return null;
+  const totalSpan=(v1mDisplay[v1mDisplay.length-1].time - v1mDisplay[0].time)/60;
+  if(totalSpan<15) return null;
+  const cutoff=v1mDisplay[v1mDisplay.length-1].time - VSLOPE_WINDOW_MIN*60;
+  const pts=v1mDisplay.filter(p=>p.time>=cutoff);
+  const n=pts.length;
+  if(n<3) return null;
+  const t0=pts[0].time;
+  let sx=0,sy=0,sxy=0,sx2=0;
+  for(let i=0;i<n;i++){
+    const x=(pts[i].time-t0)/60;
+    const y=pts[i].value;
+    sx+=x; sy+=y; sxy+=x*y; sx2+=x*x;
+  }
+  const denom=n*sx2-sx*sx;
+  if(denom===0) return 0;
+  const slope=(n*sxy-sx*sy)/denom;
+  return +(slope/atr).toFixed(4);
 }
 
-// ADX — Wilder smoothing, period = 14
-// ADX < 25 = no trend, ADX > 25 = trending
-function calcADX(candles, period=14){
-  const n=candles.length;
-  if(n<period*2+1) return null;
-
-  let sTR=0, sPDM=0, sNDM=0;
-  // Seed: sum first `period` values
-  for(let i=1;i<=period;i++){
-    const c=candles[i],p=candles[i-1];
-    const tr=Math.max(c.high-c.low, Math.abs(c.high-p.close), Math.abs(c.low-p.close));
-    const up=c.high-p.high, dn=p.low-c.low;
-    sTR+=tr;
-    sPDM+=(up>dn&&up>0)?up:0;
-    sNDM+=(dn>up&&dn>0)?dn:0;
+// RVOL — Relative Volume (cumulative, time-of-day matched)
+function calcRVOL(tc, displayStart){
+  const displayCandles=tc.filter(c=>c.time>=displayStart);
+  const prevCandles=tc.filter(c=>c.time<displayStart);
+  if(!displayCandles.length||!prevCandles.length) return null;
+  const displayCumVol=displayCandles.reduce((s,c)=>s+c.volume,0);
+  const latestTOD=displayCandles[displayCandles.length-1].time%86400;
+  const days={};
+  for(const c of prevCandles){
+    const dayKey=Math.floor(c.time/86400);
+    if(!days[dayKey]) days[dayKey]=[];
+    days[dayKey].push(c);
   }
-
-  // Wilder smooth remainder, collect DX for initial ADX seed
-  let dxBuf=[], adx=null;
-  for(let i=period+1;i<n;i++){
-    const c=candles[i],p=candles[i-1];
-    const tr=Math.max(c.high-c.low, Math.abs(c.high-p.close), Math.abs(c.low-p.close));
-    const up=c.high-p.high, dn=p.low-c.low;
-    sTR =sTR -sTR /period+tr;
-    sPDM=sPDM-sPDM/period+((up>dn&&up>0)?up:0);
-    sNDM=sNDM-sNDM/period+((dn>up&&dn>0)?dn:0);
-    const pDI=sTR>0?100*sPDM/sTR:0;
-    const nDI=sTR>0?100*sNDM/sTR:0;
-    const diSum=pDI+nDI;
-    const dx=diSum>0?100*Math.abs(pDI-nDI)/diSum:0;
-    if(adx===null){
-      dxBuf.push(dx);
-      if(dxBuf.length===period){
-        adx=dxBuf.reduce((a,b)=>a+b,0)/period;
-      }
-    } else {
-      adx=adx-adx/period+dx;
+  const dayKeys=Object.keys(days).map(Number).sort((a,b)=>b-a).slice(0,RVOL_MAX_DAYS);
+  const prevVols=[];
+  for(const dk of dayKeys){
+    let vol=0;
+    for(const c of days[dk]){
+      if((c.time%86400)<=latestTOD) vol+=c.volume;
     }
+    if(vol>0) prevVols.push(vol);
   }
-  return adx!==null ? +adx.toFixed(1) : null;
+  if(!prevVols.length) return null;
+  const avgPrevVol=prevVols.reduce((a,b)=>a+b,0)/prevVols.length;
+  return avgPrevVol>0 ? +(displayCumVol/avgPrevVol).toFixed(2) : null;
 }
 
-// VWAP Cross Frequency — count price crosses over VWAP today only
-// Higher = price is oscillating around VWAP = good MR environment
-function calcXF(tc, todayStart){
+// VWAP Cross Frequency
+function calcXF(tc, displayStart){
   let xf=0, prevSide=null;
   for(const c of tc){
-    if(c.time<todayStart) continue;
+    if(c.time<displayStart) continue;
     if(c._vwap===undefined) continue;
     const side=c.close>c._vwap?1:-1;
     if(prevSide!==null&&side!==prevSide) xf++;
@@ -345,25 +342,28 @@ function calcXF(tc, todayStart){
   return xf;
 }
 
-// Regime: RANGING / TRENDING / UNCERTAIN
-function getRegime(er, adx){
-  if(er===null||adx===null) return 'UNCERTAIN';
-  if(er<0.3&&adx<25) return 'RANGING';
-  if(er>0.6&&adx>25) return 'TRENDING';
+// Regime: SIDEWAYS / TRENDING / UNCERTAIN
+function getRegime(vslope, rvol){
+  if(vslope===null) return 'UNCERTAIN';
+  const slopeFlat=Math.abs(vslope)<0.008;
+  const rvolHigh=rvol!==null&&rvol>=2.0;
+  if(slopeFlat&&!rvolHigh) return 'SIDEWAYS';
+  if(!slopeFlat) return 'TRENDING';
   return 'UNCERTAIN';
 }
 
-// Color helpers — green=good for MR, red=bad, yellow=borderline
-function erColor(er){
-  if(er===null) return 'var(--t3)';
-  if(er<0.3) return 'var(--green)';
-  if(er<0.6) return 'var(--yellow)';
+// Color helpers
+function vsColor(vs){
+  if(vs===null) return 'var(--t3)';
+  const a=Math.abs(vs);
+  if(a<0.008) return 'var(--green)';
+  if(a<0.015) return 'var(--yellow)';
   return 'var(--red)';
 }
-function adxColor(adx){
-  if(adx===null) return 'var(--t3)';
-  if(adx<25) return 'var(--green)';
-  if(adx<35) return 'var(--yellow)';
+function rvolColor(rvol){
+  if(rvol===null) return 'var(--t3)';
+  if(rvol<1.5) return 'var(--green)';
+  if(rvol<2.0) return 'var(--yellow)';
   return 'var(--red)';
 }
 function xfColor(xf){
@@ -405,6 +405,14 @@ function process(raw,tf,k,ap){
   const v1=calcVWAP(raw),tc=agg(raw,tf),vt=smpVWAP(v1,tc,tf),at=calcATR(tc,ap);
   const todayStart=getTodayStartUTC();
 
+  // Display day fallback: if no candles today, use last trading day
+  const hasTodayData=tc.some(c=>c.time>=todayStart);
+  let displayStart=todayStart;
+  if(!hasTodayData&&tc.length>0){
+    const lastTime=tc[tc.length-1].time;
+    displayStart=lastTime-(lastTime%86400);
+  }
+
   const cd=[],vl=[],ul=[],ll=[],vd=[];
   let ld=0,lv=0,la=0,lp=0,lu=0,lo=0,tv=0;
   let prevSide=null, xf=0;
@@ -412,7 +420,7 @@ function process(raw,tf,k,ap){
   for(let i=0;i<tc.length;i++){
     const c=tc[i],v=vt[i].value,a=at[i].value;
     const up=+(v+k*a).toFixed(2),dn=+(v-k*a).toFixed(2),dev=a>0?(c.close-v)/a:0;
-    const isToday=c.time>=todayStart;
+    const isDisplay=c.time>=displayStart;
 
     cd.push({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close});
     vd.push({time:c.time,value:c.volume,color:c.close>=c.open?'rgba(52,211,153,0.35)':'rgba(248,113,113,0.35)'});
@@ -420,7 +428,7 @@ function process(raw,tf,k,ap){
     // Attach vwap value for XF calculation
     tc[i]._vwap=v;
 
-    if(isToday){
+    if(isDisplay){
       vl.push({time:c.time,value:+v.toFixed(2)});
       ul.push({time:c.time,value:up});
       ll.push({time:c.time,value:dn});
@@ -435,14 +443,15 @@ function process(raw,tf,k,ap){
     ld=dev;lv=v;la=a;lp=c.close;lu=up;lo=dn;
   }
 
-  // Regime indicators — use all tf candles (spans multiple days, enough data)
-  const er=calcER(tc,20);
-  const adx=calcADX(tc,ap);
-  const regime=getRegime(er,adx);
+  // Regime indicators — VSlope uses 1m VWAP (TF-independent)
+  const v1mDisplay=v1.filter(p=>p.time>=displayStart);
+  const vslope=calcVWAPSlope(v1mDisplay,la);
+  const rvol=calcRVOL(tc,displayStart);
+  const regime=getRegime(vslope,rvol);
 
   return{
-    candles:cd,vwapLine:vl,upperLine:ul,lowerLine:ll,volData:vd,
-    m:{dev:ld,vwap:lv,atr:la,price:lp,upper:lu,lower:lo,vol:tv,er,adx,xf,regime}
+    candles:cd,vwapLine:vl,upperLine:ul,lowerLine:ll,volData:vd,displayStart,
+    m:{dev:ld,vwap:lv,atr:la,price:lp,upper:lu,lower:lo,vol:tv,vslope,rvol,xf,regime}
   };
 }
 
@@ -489,6 +498,7 @@ class Panel{
     this.cell=document.getElementById(cid);
     this.ch=null;this.cs=null;this.vs=null;this.ws=null;this.us=null;this.ls=null;
     this.initialized=false;
+    this._hasData=false;
     this.zones=null;this.zoneSeries=[];
     this.build();
   }
@@ -515,11 +525,11 @@ class Panel{
   <span><span class="ml">Band </span><span class="mv" style="color:var(--t2)" id="mb-${i}">—</span></span>
   <div class="msep"></div>
   <span class="regime-lbl regime-uncertain" id="mrg-${i}">—</span>
-  <span><span class="ml">ER </span><span class="mv" id="mer-${i}">—</span></span>
-  <span><span class="ml">ADX </span><span class="mv" id="madx-${i}">—</span></span>
+  <span><span class="ml">VS </span><span class="mv" id="mer-${i}">—</span></span>
+  <span><span class="ml">RVOL </span><span class="mv" id="madx-${i}">—</span></span>
   <span><span class="ml">XF </span><span class="mv" id="mxf-${i}">—</span></span>
 </div>`;
-    document.getElementById(`si-${i}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.initialized=false;this.zones=null;this.load();});
+    document.getElementById(`si-${i}`).addEventListener('change',e=>{this.sym=e.target.value.toUpperCase();e.target.value=this.sym;this.initialized=false;this._hasData=false;this.zones=null;this.load();});
     this.mkChart();
   }
 
@@ -597,14 +607,36 @@ class Panel{
 
   render(){
     if(!this.raw.length)return;
-    const{candles,vwapLine,upperLine,lowerLine,volData,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
+    const{candles,vwapLine,upperLine,lowerLine,volData,displayStart,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
     const i=this.idx;
 
-    this.cs.setData(candles);
-    this.vs.setData(volData);
-    this.ws.setData(vwapLine);
-    this.us.setData(upperLine);
-    this.ls.setData(lowerLine);
+    // Incremental update: setData first time, update() after
+    if(!this._hasData){
+      this.cs.setData(candles);
+      this.vs.setData(volData);
+      this.ws.setData(vwapLine);
+      if(CFG.bandOn){
+        this.us.setData(upperLine);
+        this.ls.setData(lowerLine);
+      } else {
+        this.us.setData([]);
+        this.ls.setData([]);
+      }
+      this._hasData=true;
+    } else {
+      if(candles.length){
+        this.cs.update(candles[candles.length-1]);
+        this.vs.update(volData[volData.length-1]);
+      }
+      if(vwapLine.length) this.ws.update(vwapLine[vwapLine.length-1]);
+      if(CFG.bandOn){
+        if(upperLine.length) this.us.update(upperLine[upperLine.length-1]);
+        if(lowerLine.length) this.ls.update(lowerLine[lowerLine.length-1]);
+      } else {
+        this.us.setData([]);
+        this.ls.setData([]);
+      }
+    }
 
     // Price header
     const pct=m.vwap?((m.price-m.vwap)/m.vwap*100):0;
@@ -624,17 +656,17 @@ class Panel{
     const rgEl=document.getElementById(`mrg-${i}`);
     rgEl.textContent=m.regime;
     rgEl.className='regime-lbl '+(
-      m.regime==='RANGING'  ? 'regime-ranging'  :
+      m.regime==='SIDEWAYS'  ? 'regime-sideways'  :
       m.regime==='TRENDING' ? 'regime-trending' : 'regime-uncertain'
     );
 
-    const erEl=document.getElementById(`mer-${i}`);
-    erEl.textContent=m.er!==null?m.er.toFixed(2):'—';
-    erEl.style.color=erColor(m.er);
+    const vsEl=document.getElementById(`mer-${i}`);
+    vsEl.textContent=m.vslope!==null?m.vslope.toFixed(3):'—';
+    vsEl.style.color=vsColor(m.vslope);
 
-    const adxEl=document.getElementById(`madx-${i}`);
-    adxEl.textContent=m.adx!==null?m.adx.toFixed(1):'—';
-    adxEl.style.color=adxColor(m.adx);
+    const rvolEl=document.getElementById(`madx-${i}`);
+    rvolEl.textContent=m.rvol!==null?m.rvol.toFixed(1)+'x':'—';
+    rvolEl.style.color=rvolColor(m.rvol);
 
     const xfEl=document.getElementById(`mxf-${i}`);
     xfEl.textContent=m.xf;
@@ -649,36 +681,29 @@ class Panel{
     db.className='dev-badge mono '+dc+(m.regime==='TRENDING'?' dimmed':'');
     db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
 
-    // Zone lines (LineSeries — today only)
+    // Zone lines (display day)
     if(this.zones && this.zoneSeries.length===6){
       const zn=this.zones;
-      const todayStart=getTodayStartUTC();
-      const todayCandles=candles.filter(c=>c.time>=todayStart);
-      const tStart=todayCandles.length?todayCandles[0].time:todayStart;
-      const tEnd=todayCandles.length>1?todayCandles[todayCandles.length-1].time:(tStart+CFG.tf*60);
+      const displayCandles=candles.filter(c=>c.time>=displayStart);
+      const tStart=displayCandles.length?displayCandles[0].time:displayStart;
+      const tEnd=displayCandles.length>1?displayCandles[displayCandles.length-1].time:(tStart+CFG.tf*60);
       const prices=[zn.bid1,zn.bid2,zn.bid3,zn.ask1,zn.ask2,zn.ask3];
-      const zl=CFG.zoneLevel; // 'auto', 0, 1, 3
-      const p=m.price; // current price
+      const zl=CFG.zoneLevel;
+      const p=m.price;
 
-      // Determine visibility per zone
       let showFlags=[false,false,false,false,false,false];
       if(zl===3){
         showFlags=[true,true,true,true,true,true];
       } else if(zl===1){
         showFlags=[true,false,false,true,false,false];
       } else if(zl==='auto'){
-        // Always show Z1
         showFlags[0]=true; showFlags[3]=true;
-        // Show B2 if price <= B1, B3 if price <= B2
         if(p<=zn.bid1) showFlags[1]=true;
         if(p<=zn.bid2) showFlags[2]=true;
-        // Show A2 if price >= A1, A3 if price >= A2
         if(p>=zn.ask1) showFlags[4]=true;
         if(p>=zn.ask2) showFlags[5]=true;
       }
-      // zl===0 → all false (off)
 
-      // Zone labels & ref
       const labels=['B1','B2','B3','A1','A2','A3'];
       const mColors=['#22d3ee','#22d3ee','#22d3ee','#fb923c','#fb923c','#fb923c'];
       for(let j=0;j<6;j++){
@@ -691,7 +716,6 @@ class Panel{
         }
       }
 
-      // Ref line
       if(zl!==0 && tStart<tEnd){
         this.refSeries.setData([{time:tStart,value:zn.ref},{time:tEnd,value:zn.ref}]);
         this.refSeries.setMarkers([{time:tStart,position:'inBar',color:'#94a3b8',shape:'circle',text:'Ref',size:0}]);
@@ -705,13 +729,12 @@ class Panel{
       this.refSeries.setMarkers([]);
     }
 
-    // Initial zoom
+    // Initial zoom — use displayStart (fallback aware)
     if(!this.initialized&&candles.length>0){
       this.initialized=true;
-      const todayStart=getTodayStartUTC();
-      let todayIdx=candles.findIndex(c=>c.time>=todayStart);
-      if(todayIdx<0) todayIdx=Math.max(0,candles.length-50);
-      const fromIdx=Math.max(0,todayIdx-10);
+      let zoomIdx=candles.findIndex(c=>c.time>=displayStart);
+      if(zoomIdx<0) zoomIdx=Math.max(0,candles.length-50);
+      const fromIdx=Math.max(0,zoomIdx-10);
       this.ch.timeScale().setVisibleLogicalRange({from:fromIdx,to:candles.length+3});
     }
   }
@@ -720,15 +743,16 @@ class Panel{
 // ======== DASHBOARD ========
 const panels=[];let rTimer=null;
 async function loadAll(){for(const p of panels){await p.load();await new Promise(r=>setTimeout(r,1100));}}
-function renderAll(){panels.forEach(p=>{p.initialized=false;p.render();});}
+function renderAll(){panels.forEach(p=>{p.initialized=false;p._hasData=false;p.render();});}
 function startRefresh(){if(rTimer)clearInterval(rTimer);rTimer=setInterval(()=>loadAll(),CFG.refresh*1000);}
 
 function setupBG(id,cb){document.getElementById(id).addEventListener('click',e=>{if(!e.target.classList.contains('btn'))return;document.getElementById(id).querySelectorAll('.btn').forEach(b=>b.classList.remove('on'));e.target.classList.add('on');cb(e.target.dataset.v);});}
-document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat(e.target.value);document.getElementById('k-val').textContent=CFG.k.toFixed(1);panels.forEach(p=>p.render());});
-document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;panels.forEach(p=>p.render());});
+document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat(e.target.value);document.getElementById('k-val').textContent=CFG.k.toFixed(1);renderAll();});
+document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;renderAll();});
 setupBG('ref-btns',v=>{CFG.refresh=parseInt(v);startRefresh();});
 setupBG('tf-btns',v=>{CFG.tf=parseInt(v);renderAll();});
-setupBG('zone-btns',v=>{CFG.zoneLevel=isNaN(v)?v:parseInt(v);panels.forEach(p=>p.render());});
+setupBG('zone-btns',v=>{CFG.zoneLevel=isNaN(v)?v:parseInt(v);panels.forEach(p=>{p._hasData=false;p.render();});});
+setupBG('band-btns',v=>{CFG.bandOn=v==='1';panels.forEach(p=>{p._hasData=false;p.render();});});
 
 // Theme toggle
 const savedTheme=localStorage.getItem('vwap-theme')||'dark';
