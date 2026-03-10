@@ -84,7 +84,8 @@
   <div class="ctrl"><span class="ctrl-label">K</span><input type="range" id="k-range" min="1.0" max="3.0" step="0.1" value="2.0"><span class="ctrl-val" id="k-val">2.0</span></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">ATR</span><input type="range" id="atr-range" min="7" max="28" step="1" value="14"><span class="ctrl-val" id="atr-val">14</span></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Refresh</span><div class="btn-group" id="ref-btns"><button class="btn" data-v="5">5s</button><button class="btn on" data-v="15">15s</button><button class="btn" data-v="30">30s</button></div></div><div class="sep"></div>
-  <div class="ctrl"><span class="ctrl-label">Nến</span><div class="btn-group" id="tf-btns"><button class="btn" data-v="1">1m</button><button class="btn on" data-v="5">5m</button><button class="btn" data-v="15">15m</button></div></div>
+  <div class="ctrl"><span class="ctrl-label">Nến</span><div class="btn-group" id="tf-btns"><button class="btn" data-v="1">1m</button><button class="btn on" data-v="5">5m</button><button class="btn" data-v="15">15m</button></div></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">Zones</span><div class="btn-group" id="zone-btns"><button class="btn on" data-v="1">Z1</button><button class="btn" data-v="3">All</button><button class="btn" data-v="0">Off</button></div></div>
   <div class="legend"><span><i style="background:#facc15"></i>VWAP</span><span><i style="background:#f87171"></i>Upper</span><span><i style="background:#34d399"></i>Lower</span></div>
 </div>
 
@@ -93,7 +94,7 @@
 <script>
 const VN_OFFSET=7*3600;
 const DEFAULT_PROXY='https://proxy.nhathuynh1293.workers.dev';
-const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
+const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,zoneLevel:1,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
 
 // ======== HELPERS ========
 function getTodayStartUTC(){
@@ -453,7 +454,7 @@ class Panel{
     this.cell=document.getElementById(cid);
     this.ch=null;this.cs=null;this.vs=null;this.ws=null;this.us=null;this.ls=null;
     this.initialized=false;
-    this.zones=null;this.priceLines=[];
+    this.zones=null;this.zoneSeries=[];
     this.build();
   }
 
@@ -503,6 +504,32 @@ class Panel{
     this.ws=this.ch.addLineSeries({color:'#facc15',lineWidth:2,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:true,crosshairMarkerRadius:3});
     this.us=this.ch.addLineSeries({color:'rgba(248,113,113,0.7)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
     this.ls=this.ch.addLineSeries({color:'rgba(52,211,153,0.7)',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
+
+    // Zone line series: [B1, B2, B3, A1, A2, A3]
+    const zoneOpts=[
+      {color:'rgba(52,211,153,0.50)', lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(52,211,153,0.25)', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(52,211,153,0.18)', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(248,113,113,0.50)',lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(248,113,113,0.25)',lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(248,113,113,0.18)',lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+    ];
+    this.zoneSeries=zoneOpts.map(o=>this.ch.addLineSeries({...o,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,title:''}));
+
+    // Scroll wheel zoom on price scale
+    const chart=this.ch;
+    let margins={top:0.06,bottom:0.22};
+    el.addEventListener('wheel',e=>{
+      // Only trigger when mouse is on the right ~55px (price scale area)
+      const rect=el.getBoundingClientRect();
+      if(e.clientX < rect.right-55) return;
+      e.preventDefault();
+      const delta=e.deltaY>0?0.02:-0.02;
+      margins.top=Math.max(0.01,Math.min(0.4,margins.top+delta));
+      margins.bottom=Math.max(0.05,Math.min(0.5,margins.bottom+delta));
+      chart.priceScale('right').applyOptions({autoScale:true,scaleMargins:{top:margins.top,bottom:margins.bottom}});
+    },{passive:false});
+
     new ResizeObserver(()=>{this.ch.applyOptions({width:el.clientWidth,height:el.clientHeight});}).observe(el);
   }
 
@@ -569,27 +596,28 @@ class Panel{
     db.className='dev-badge mono '+dc+(m.regime==='TRENDING'?' dimmed':'');
     db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
 
-    // Zone price lines
-    this.priceLines.forEach(pl=>{try{this.cs.removePriceLine(pl);}catch(e){}});
-    this.priceLines=[];
-    if(this.zones){
+    // Zone lines (LineSeries — today only)
+    if(this.zones && this.zoneSeries.length===6){
       const zn=this.zones;
-      const zoneDefs=[
-        {price:zn.bid1, title:'B1 '+zn.bid1.toFixed(1), color:'#34d399',   lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dashed},
-        {price:zn.bid2, title:'B2 '+zn.bid2.toFixed(1), color:'#34d399aa', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dashed},
-        {price:zn.bid3, title:'B3 '+zn.bid3.toFixed(1), color:'#34d39966', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-        {price:zn.ask1, title:'A1 '+zn.ask1.toFixed(1), color:'#f87171',   lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dashed},
-        {price:zn.ask2, title:'A2 '+zn.ask2.toFixed(1), color:'#f87171aa', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dashed},
-        {price:zn.ask3, title:'A3 '+zn.ask3.toFixed(1), color:'#f8717166', lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-      ];
-      for(const zd of zoneDefs){
-        const pl=this.cs.createPriceLine({
-          price:zd.price, color:zd.color, lineWidth:zd.lineWidth, lineStyle:zd.lineStyle,
-          axisLabelVisible:true, title:zd.title,
-          axisLabelColor:zd.color, axisLabelTextColor:'#fff',
-        });
-        this.priceLines.push(pl);
+      const todayStart=getTodayStartUTC();
+      // Find today's candle time range
+      const todayCandles=candles.filter(c=>c.time>=todayStart);
+      const tStart=todayCandles.length?todayCandles[0].time:todayStart;
+      const tEnd=todayCandles.length>1?todayCandles[todayCandles.length-1].time:(tStart+CFG.tf*60);
+      const prices=[zn.bid1,zn.bid2,zn.bid3,zn.ask1,zn.ask2,zn.ask3];
+      const zl=CFG.zoneLevel; // 0=off, 1=Z1 only, 3=all
+      for(let j=0;j<6;j++){
+        const isZ1=(j===0||j===3);
+        const show=(zl===3)||(zl===1&&isZ1);
+        if(show && tStart<tEnd){
+          this.zoneSeries[j].setData([{time:tStart,value:prices[j]},{time:tEnd,value:prices[j]}]);
+        } else {
+          this.zoneSeries[j].setData([]);
+        }
       }
+    } else {
+      // No zones — clear all
+      this.zoneSeries.forEach(s=>s.setData([]));
     }
 
     // Initial zoom
@@ -615,6 +643,7 @@ document.getElementById('k-range').addEventListener('input',e=>{CFG.k=parseFloat
 document.getElementById('atr-range').addEventListener('input',e=>{CFG.atrPeriod=parseInt(e.target.value);document.getElementById('atr-val').textContent=CFG.atrPeriod;panels.forEach(p=>p.render());});
 setupBG('ref-btns',v=>{CFG.refresh=parseInt(v);startRefresh();});
 setupBG('tf-btns',v=>{CFG.tf=parseInt(v);renderAll();});
+setupBG('zone-btns',v=>{CFG.zoneLevel=parseInt(v);panels.forEach(p=>p.render());});
 
 if(typeof LightweightCharts==='undefined'){
   document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace;color:#94a3b8"><div><h2 style="color:#22d3ee">VWAP.MR</h2><p>Không load được chart library. Cần internet.</p></div></div>';
