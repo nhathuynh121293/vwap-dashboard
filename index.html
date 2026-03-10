@@ -104,7 +104,7 @@
   <div class="ctrl"><span class="ctrl-label">Refresh</span><div class="btn-group" id="ref-btns"><button class="btn" data-v="5">5s</button><button class="btn on" data-v="15">15s</button><button class="btn" data-v="30">30s</button></div></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Nến</span><div class="btn-group" id="tf-btns"><button class="btn" data-v="1">1m</button><button class="btn on" data-v="5">5m</button><button class="btn" data-v="15">15m</button></div></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Zones</span><div class="btn-group" id="zone-btns"><button class="btn on" data-v="auto">Auto</button><button class="btn" data-v="1">Z1</button><button class="btn" data-v="3">All</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
-  <div class="ctrl"><span class="ctrl-label">Band</span><div class="btn-group" id="band-btns"><button class="btn on" data-v="1">On</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">VWAP Band</span><div class="btn-group" id="band-btns"><button class="btn on" data-v="1">On</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
   <button class="theme-btn" id="theme-toggle" title="Đổi theme">☀</button>
   <div class="legend"><span><i style="background:#facc15"></i>VWAP</span><span><i style="background:#f87171"></i>Upper</span><span><i style="background:#34d399"></i>Lower</span></div>
 </div>
@@ -525,7 +525,7 @@ class Panel{
   <span><span class="ml">Band </span><span class="mv" style="color:var(--t2)" id="mb-${i}">—</span></span>
   <div class="msep"></div>
   <span class="regime-lbl regime-uncertain" id="mrg-${i}">—</span>
-  <span><span class="ml">VS </span><span class="mv" id="mer-${i}">—</span></span>
+  <span><span class="ml">Slope </span><span class="mv" id="mer-${i}">—</span></span>
   <span><span class="ml">RVOL </span><span class="mv" id="madx-${i}">—</span></span>
   <span><span class="ml">XF </span><span class="mv" id="mxf-${i}">—</span></span>
 </div>`;
@@ -614,11 +614,12 @@ class Panel{
     if(!this._hasData){
       this.cs.setData(candles);
       this.vs.setData(volData);
-      this.ws.setData(vwapLine);
       if(CFG.bandOn){
+        this.ws.setData(vwapLine);
         this.us.setData(upperLine);
         this.ls.setData(lowerLine);
       } else {
+        this.ws.setData([]);
         this.us.setData([]);
         this.ls.setData([]);
       }
@@ -628,11 +629,12 @@ class Panel{
         this.cs.update(candles[candles.length-1]);
         this.vs.update(volData[volData.length-1]);
       }
-      if(vwapLine.length) this.ws.update(vwapLine[vwapLine.length-1]);
       if(CFG.bandOn){
+        if(vwapLine.length) this.ws.update(vwapLine[vwapLine.length-1]);
         if(upperLine.length) this.us.update(upperLine[upperLine.length-1]);
         if(lowerLine.length) this.ls.update(lowerLine[lowerLine.length-1]);
       } else {
+        this.ws.setData([]);
         this.us.setData([]);
         this.ls.setData([]);
       }
