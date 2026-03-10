@@ -544,12 +544,12 @@ class Panel{
     // Zone line series: [B1, B2, B3, A1, A2, A3]
     // Bid = cyan/blue, Ask = orange/amber — distinct from ATR bands (red/green)
     const zoneOpts=[
-      {color:'rgba(34,211,238,0.70)',  lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(34,211,238,0.50)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(34,211,238,0.35)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(251,146,60,0.70)',  lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(251,146,60,0.50)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(251,146,60,0.35)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(34,211,238,0.85)',  lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(34,211,238,0.70)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(34,211,238,0.55)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(251,146,60,0.85)',  lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(251,146,60,0.70)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(251,146,60,0.55)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
     ];
     this.zoneSeries=zoneOpts.map(o=>this.ch.addLineSeries({...o,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,title:''}));
 
