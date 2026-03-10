@@ -59,7 +59,7 @@
   .price-info{display:flex;align-items:center;gap:12px;font-size:13px;}
   .price-main{font-weight:700;font-size:15px;}
   /* DEV badge — no longer absolute, removed from chart overlay */
-  .dev-badge{position:absolute;top:44px;right:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);transition:opacity .3s;}
+  .dev-badge{position:absolute;top:44px;left:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);transition:opacity .3s;}
   .dev-badge small{font-size:9px;font-weight:600;display:block;opacity:.8;letter-spacing:.8px;margin-bottom:1px;}
   .dev-long{background:rgba(52,211,153,.1);color:var(--green);border-color:rgba(52,211,153,.25);}
   .dev-short{background:rgba(248,113,113,.1);color:var(--red);border-color:rgba(248,113,113,.25);}
@@ -553,6 +553,9 @@ class Panel{
     ];
     this.zoneSeries=zoneOpts.map(o=>this.ch.addLineSeries({...o,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,title:''}));
 
+    // Ref line (pivot center)
+    this.refSeries=this.ch.addLineSeries({color:'rgba(148,163,184,0.45)',lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,title:''});
+
     // Scroll wheel zoom on price scale
     const chart=this.ch;
     let margins={top:0.06,bottom:0.22};
@@ -675,15 +678,31 @@ class Panel{
       }
       // zl===0 → all false (off)
 
+      // Zone labels & ref
+      const labels=['B1','B2','B3','A1','A2','A3'];
+      const mColors=['#22d3ee','#22d3ee','#22d3ee','#fb923c','#fb923c','#fb923c'];
       for(let j=0;j<6;j++){
         if(showFlags[j] && tStart<tEnd){
           this.zoneSeries[j].setData([{time:tStart,value:prices[j]},{time:tEnd,value:prices[j]}]);
+          this.zoneSeries[j].setMarkers([{time:tStart,position:'inBar',color:mColors[j],shape:'circle',text:labels[j],size:0}]);
         } else {
           this.zoneSeries[j].setData([]);
+          this.zoneSeries[j].setMarkers([]);
         }
       }
+
+      // Ref line
+      if(zl!==0 && tStart<tEnd){
+        this.refSeries.setData([{time:tStart,value:zn.ref},{time:tEnd,value:zn.ref}]);
+        this.refSeries.setMarkers([{time:tStart,position:'inBar',color:'#94a3b8',shape:'circle',text:'Ref',size:0}]);
+      } else {
+        this.refSeries.setData([]);
+        this.refSeries.setMarkers([]);
+      }
     } else {
-      this.zoneSeries.forEach(s=>s.setData([]));
+      this.zoneSeries.forEach(s=>{s.setData([]);s.setMarkers([]);});
+      this.refSeries.setData([]);
+      this.refSeries.setMarkers([]);
     }
 
     // Initial zoom
