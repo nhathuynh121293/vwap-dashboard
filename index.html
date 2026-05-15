@@ -58,7 +58,6 @@
   .sym-input:focus{border-color:var(--cyan);box-shadow:0 0 4px rgba(34,211,238,.2);}
   .price-info{display:flex;align-items:center;gap:12px;font-size:13px;}
   .price-main{font-weight:700;font-size:15px;}
-  /* DEV badge — no longer absolute, removed from chart overlay */
   .dev-badge{position:absolute;top:44px;left:12px;z-index:10;padding:5px 12px;border-radius:8px;font-size:18px;font-weight:700;backdrop-filter:blur(10px);border:1px solid;text-align:center;line-height:1.2;box-shadow:0 2px 12px rgba(0,0,0,.3);transition:opacity .3s;}
   .dev-badge small{font-size:9px;font-weight:600;display:block;opacity:.8;letter-spacing:.8px;margin-bottom:1px;}
   .dev-long{background:rgba(52,211,153,.1);color:var(--green);border-color:rgba(52,211,153,.25);}
@@ -66,11 +65,9 @@
   .dev-neutral{background:rgba(148,163,184,.08);color:var(--neutral);border-color:rgba(148,163,184,.15);}
   .dev-badge.dimmed{opacity:.2;}
   .chart-wrap{flex:1;min-height:0;}
-  /* metrics bar — single row, extended */
   .metrics{display:flex;align-items:center;gap:12px;padding:5px 12px;background:var(--bg1);border-top:1px solid var(--border);height:30px;flex-shrink:0;font-size:11px;letter-spacing:.2px;overflow:hidden;}
   .metrics .ml{color:var(--t3);}.metrics .mv{font-weight:600;}
   .msep{width:1px;height:16px;background:var(--border);flex-shrink:0;margin:0 2px;}
-  /* regime badge inside metrics bar */
   .regime-lbl{font-size:10px;font-weight:700;letter-spacing:.8px;padding:1px 6px;border-radius:3px;border:1px solid;}
   .regime-sideways{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07);}
   .regime-trending{color:var(--red);border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.07);}
@@ -103,10 +100,10 @@
   <div class="ctrl"><span class="ctrl-label">ATR</span><input type="range" id="atr-range" min="7" max="28" step="1" value="14"><span class="ctrl-val" id="atr-val">14</span></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Refresh</span><div class="btn-group" id="ref-btns"><button class="btn" data-v="5">5s</button><button class="btn on" data-v="15">15s</button><button class="btn" data-v="30">30s</button></div></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">Nến</span><div class="btn-group" id="tf-btns"><button class="btn" data-v="1">1m</button><button class="btn on" data-v="5">5m</button><button class="btn" data-v="15">15m</button></div></div><div class="sep"></div>
-  <div class="ctrl"><span class="ctrl-label">Zones</span><div class="btn-group" id="zone-btns"><button class="btn on" data-v="auto">Auto</button><button class="btn" data-v="1">Z1</button><button class="btn" data-v="3">All</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
+  <div class="ctrl"><span class="ctrl-label">Zones</span><div class="btn-group" id="zone-btns"><button class="btn on" data-v="auto">Auto</button><button class="btn" data-v="1">p75</button><button class="btn" data-v="3">All</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
   <div class="ctrl"><span class="ctrl-label">VWAP Band</span><div class="btn-group" id="band-btns"><button class="btn on" data-v="1">On</button><button class="btn" data-v="0">Off</button></div></div><div class="sep"></div>
   <button class="theme-btn" id="theme-toggle" title="Đổi theme">☀</button>
-  <div class="legend"><span><i style="background:#facc15"></i>VWAP</span><span><i style="background:#f87171"></i>Upper</span><span><i style="background:#34d399"></i>Lower</span></div>
+  <div class="legend"><span><i style="background:#facc15"></i>VWAP</span><span><i style="background:#22d3ee"></i>Buy zone</span><span><i style="background:#fb923c"></i>Sell zone</span></div>
 </div>
 
 <div class="grid"><div class="cell" id="c0"></div><div class="cell" id="c1"></div><div class="cell" id="c2"></div><div class="cell" id="c3"></div></div>
@@ -123,6 +120,12 @@ function getTodayStartUTC(){
   return Date.UTC(vnNow.getUTCFullYear(),vnNow.getUTCMonth(),vnNow.getUTCDate(),0,0,0)/1000;
 }
 
+function getVNDateStr(){
+  const now=new Date();
+  const vn=new Date(now.getTime()+VN_OFFSET*1000);
+  return vn.getUTCFullYear()+'-'+String(vn.getUTCMonth()+1).padStart(2,'0')+'-'+String(vn.getUTCDate()).padStart(2,'0');
+}
+
 function fmtVol(v){
   if(!v||v<=0) return '—';
   if(v>=1e6) return (v/1e6).toFixed(1)+'M';
@@ -130,162 +133,75 @@ function fmtVol(v){
   return v.toString();
 }
 
-// ======== ZONES (init_zones logic) ========
-const WINDOW_SIZE=252;
-const TRANS_FEE=0.027/100;
+// ======== ZONES — Percentile-based ========
+// percentiles.json được GitHub Actions build mỗi ngày và commit vào repo.
+// URL tĩnh trên GitHub Pages — fetch 1 lần/ngày, cache trong memory.
 
-function roundPrice(price, side){
-  // HOSE price steps: <10k→10, 10k-50k→50, >=50k→100
-  let step;
-  if(price<10000) step=10;
-  else if(price<50000) step=50;
-  else step=100;
-  if(side==='buy') return Math.floor(price/step)*step;
-  if(side==='sell') return Math.ceil(price/step)*step;
-  return Math.round(price/step)*step;
+const PERC_URL='https://nhathuynh121293.github.io/vwap-dashboard/data/percentiles.json';
+let _percCache=null, _percDate=null;
+
+async function fetchPercentiles(){
+  const today=getVNDateStr();
+  if(_percCache&&_percDate===today) return _percCache;
+  try{
+    const r=await fetch(PERC_URL+'?d='+today); // cache-bust theo ngày
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    _percCache=j.symbols||{};
+    _percDate=today;
+    console.log('[Zones] Loaded percentiles for',Object.keys(_percCache).length,'symbols');
+    return _percCache;
+  }catch(e){
+    console.warn('[Zones] fetchPercentiles fail:',e.message);
+    return _percCache||{};
+  }
 }
 
-function calcZones(dailyCandles, todayOpen){
-  // dailyCandles: array of {time,open,high,low,close} from 1D API
-  // todayOpen: today's open price (raw API unit) or null
-  const n=dailyCandles.length;
-  if(n<200) return null;
-
-  // Find today's date boundary (VN timezone)
+// Tính VWAP(9:00–9:30) từ raw 1m data đã có trong panel.
+// raw[].time đã được cộng VN_OFFSET nên 9:00 VN = 09:00 UTC "apparent"
+function calcVWAP930(raw){
+  if(!raw||!raw.length) return null;
   const now=new Date();
   const vnNow=new Date(now.getTime()+VN_OFFSET*1000);
-  const todayStartSec=Date.UTC(vnNow.getUTCFullYear(),vnNow.getUTCMonth(),vnNow.getUTCDate(),0,0,0)/1000;
+  const y=vnNow.getUTCFullYear(),mo=vnNow.getUTCMonth(),d=vnNow.getUTCDate();
+  const t0=Date.UTC(y,mo,d,9,0,0)/1000;
+  const t1=Date.UTC(y,mo,d,9,30,0)/1000;
+  const bars=raw.filter(c=>c.time>=t0&&c.time<=t1);
+  if(bars.length<3) return null; // chưa đủ bars (trước 9:30)
+  const totalVol=bars.reduce((s,c)=>s+c.volume,0);
+  if(totalVol===0) return bars.reduce((s,c)=>s+c.close,0)/bars.length;
+  return bars.reduce((s,c)=>s+c.close*c.volume,0)/totalVol;
+}
 
-  // Filter out today's candle (use only closed candles for vol calc)
-  const past=dailyCandles.filter(c=>c.time<todayStartSec);
-  if(past.length<200) return null;
-
-  // Compute rolling log-return std (volatility)
-  const closes=past.map(c=>c.close);
-  const logRet=closes.map((c,i)=>i>0?Math.log(c/closes[i-1]):0);
-  logRet[0]=NaN;
-
-  // Rolling std of last WINDOW_SIZE log returns
-  const validRets=logRet.slice(-WINDOW_SIZE).filter(v=>!isNaN(v));
-  if(validRets.length<200) return null;
-  const mean=validRets.reduce((a,b)=>a+b,0)/validRets.length;
-  const variance=validRets.reduce((a,v)=>a+(v-mean)**2,0)/validRets.length;
-  const vol=Math.sqrt(variance);
-  if(vol<=0) return null;
-
-  // Previous day OHLC (last closed candle) — multiply by 1000 to VND
-  const prev=past[past.length-1];
-  const prevHigh=prev.high*1000;
-  const prevLow=prev.low*1000;
-  const prevClose=prev.close*1000;
-  const realOpen=todayOpen?todayOpen*1000:0;
-
-  // Ref calculation (gap up/down logic from init_zones.py)
-  let ref;
-  if(realOpen===0) ref=prevClose;
-  else if(realOpen>=prevHigh||realOpen<=prevLow) ref=realOpen;
-  else ref=(prevHigh+prevLow+prevClose)/3;
-
-  // Band width factors
-  const bidFactor=(vol/2)+(2*TRANS_FEE);
-  const askFactor=(vol/2)+TRANS_FEE;
-
-  const bid1=ref*(1-bidFactor);
-  const ask1=ref*(1+askFactor);
-  const width=ask1-bid1;
-
+// Trả về object zones hoặc null nếu chưa có data
+async function loadZones(sym,raw){
+  const percs=await fetchPercentiles();
+  const perc=percs[sym];
+  if(!perc) return null; // symbol chưa có trong percentiles.json
+  const vwap930=calcVWAP930(raw);
+  if(!vwap930) return null; // chưa qua 9:30 hoặc không có data
+  const u=perc.up, dn=perc.down;
   return {
-    ref:   roundPrice(ref)/1000,
-    bid1:  roundPrice(bid1,'buy')/1000,
-    ask1:  roundPrice(ask1,'sell')/1000,
-    bid2:  roundPrice(bid1-0.6*width,'buy')/1000,
-    ask2:  roundPrice(ask1+0.6*width,'sell')/1000,
-    bid3:  roundPrice(bid1-1.5*width,'buy')/1000,
-    ask3:  roundPrice(ask1+1.5*width,'sell')/1000,
-    vol:   +(vol*100).toFixed(2), // % for display
-    date:  prev.time
+    vwap930:  +vwap930.toFixed(2),
+    buy_p75:  +(vwap930*(1-dn.p75/100)).toFixed(2),
+    buy_p90:  +(vwap930*(1-dn.p90/100)).toFixed(2),
+    buy_p95:  +(vwap930*(1-dn.p95/100)).toFixed(2),
+    sell_p75: +(vwap930*(1+u.p75/100)).toFixed(2),
+    sell_p90: +(vwap930*(1+u.p90/100)).toFixed(2),
+    sell_p95: +(vwap930*(1+u.p95/100)).toFixed(2),
+    _ndays:   perc.n_days,
   };
-}
-
-// Cache zones in localStorage — 1 calc per symbol per day
-function getVNDateStr(){
-  const now=new Date();
-  const vn=new Date(now.getTime()+VN_OFFSET*1000);
-  return vn.getUTCFullYear()+'-'+String(vn.getUTCMonth()+1).padStart(2,'0')+'-'+String(vn.getUTCDate()).padStart(2,'0');
-}
-function getCachedZones(sym){
-  try{
-    const key='zones_'+sym+'_'+getVNDateStr();
-    const raw=localStorage.getItem(key);
-    if(!raw) return null;
-    const z=JSON.parse(raw);
-    // After 9:15 AM VN, if cache was computed without open, invalidate
-    const now=new Date();
-    const vnHour=(now.getUTCHours()+7)%24;
-    const vnMin=now.getUTCMinutes();
-    if(vnHour>=9&&vnMin>=15&&!z._hasOpen) return null;
-    return z;
-  }catch(e){return null;}
-}
-function setCachedZones(sym, zones, hasOpen){
-  try{
-    const key='zones_'+sym+'_'+getVNDateStr();
-    zones._hasOpen=hasOpen;
-    localStorage.setItem(key,JSON.stringify(zones));
-    // Clean old keys (keep only today)
-    const today=getVNDateStr();
-    for(let i=0;i<localStorage.length;i++){
-      const k=localStorage.key(i);
-      if(k&&k.startsWith('zones_')&&!k.endsWith(today)) localStorage.removeItem(k);
-    }
-  }catch(e){}
-}
-
-async function fetchDaily(sym){
-  try{
-    const proxy=CFG.proxy.replace(/\/$/,'');
-    const now=Math.floor(Date.now()/1000);
-    const from=now-86400*730; // 2 years
-    const r=await fetch(`${proxy}?resolution=1D&symbol=${sym}&from=${from}&to=${now}`);
-    const j=await r.json();
-    if(j.code!=='SUCCESS'||!j.data?.t) return null;
-    return j.data.t.map((t,i)=>({time:t+VN_OFFSET,open:j.data.o[i],high:j.data.h[i],low:j.data.l[i],close:j.data.c[i],volume:j.data.v[i]}));
-  }catch(e){console.warn('Daily API fail:',sym,e);return null;}
-}
-
-async function loadZones(sym){
-  // Check cache first
-  const cached=getCachedZones(sym);
-  if(cached) return cached;
-
-  // Fetch daily data
-  const daily=await fetchDaily(sym);
-  if(!daily||daily.length<200) return null;
-
-  // Get today's open from the live 1m data if available
-  const todayStart=getTodayStartUTC();
-  let todayOpen=null;
-  // Find today's candle in daily data
-  const todayDaily=daily.find(c=>c.time>=todayStart);
-  if(todayDaily) todayOpen=todayDaily.open;
-
-  const zones=calcZones(daily, todayOpen);
-  if(zones){
-    setCachedZones(sym, zones, todayOpen!==null);
-  }
-  return zones;
 }
 
 // ======== REGIME INDICATORS ========
 const RVOL_MAX_DAYS=5;
 const VSLOPE_WINDOW_MIN=60;
 
-// VWAP Slope — linear regression on 1m VWAP (TF-independent)
-function calcVWAPSlope(v1mDisplay, atr){
+function calcVWAPSlope(v1mDisplay,atr){
   if(!v1mDisplay.length||!atr||atr<=0) return null;
-  const totalSpan=(v1mDisplay[v1mDisplay.length-1].time - v1mDisplay[0].time)/60;
+  const totalSpan=(v1mDisplay[v1mDisplay.length-1].time-v1mDisplay[0].time)/60;
   if(totalSpan<15) return null;
-  const cutoff=v1mDisplay[v1mDisplay.length-1].time - VSLOPE_WINDOW_MIN*60;
+  const cutoff=v1mDisplay[v1mDisplay.length-1].time-VSLOPE_WINDOW_MIN*60;
   const pts=v1mDisplay.filter(p=>p.time>=cutoff);
   const n=pts.length;
   if(n<3) return null;
@@ -294,7 +210,7 @@ function calcVWAPSlope(v1mDisplay, atr){
   for(let i=0;i<n;i++){
     const x=(pts[i].time-t0)/60;
     const y=pts[i].value;
-    sx+=x; sy+=y; sxy+=x*y; sx2+=x*x;
+    sx+=x;sy+=y;sxy+=x*y;sx2+=x*x;
   }
   const denom=n*sx2-sx*sx;
   if(denom===0) return 0;
@@ -302,8 +218,7 @@ function calcVWAPSlope(v1mDisplay, atr){
   return +(slope/atr).toFixed(4);
 }
 
-// RVOL — Relative Volume (cumulative, time-of-day matched)
-function calcRVOL(tc, displayStart){
+function calcRVOL(tc,displayStart){
   const displayCandles=tc.filter(c=>c.time>=displayStart);
   const prevCandles=tc.filter(c=>c.time<displayStart);
   if(!displayCandles.length||!prevCandles.length) return null;
@@ -319,19 +234,16 @@ function calcRVOL(tc, displayStart){
   const prevVols=[];
   for(const dk of dayKeys){
     let vol=0;
-    for(const c of days[dk]){
-      if((c.time%86400)<=latestTOD) vol+=c.volume;
-    }
+    for(const c of days[dk]){if((c.time%86400)<=latestTOD) vol+=c.volume;}
     if(vol>0) prevVols.push(vol);
   }
   if(!prevVols.length) return null;
   const avgPrevVol=prevVols.reduce((a,b)=>a+b,0)/prevVols.length;
-  return avgPrevVol>0 ? +(displayCumVol/avgPrevVol).toFixed(2) : null;
+  return avgPrevVol>0?+(displayCumVol/avgPrevVol).toFixed(2):null;
 }
 
-// VWAP Cross Frequency
-function calcXF(tc, displayStart){
-  let xf=0, prevSide=null;
+function calcXF(tc,displayStart){
+  let xf=0,prevSide=null;
   for(const c of tc){
     if(c.time<displayStart) continue;
     if(c._vwap===undefined) continue;
@@ -342,8 +254,7 @@ function calcXF(tc, displayStart){
   return xf;
 }
 
-// Regime: SIDEWAYS / TRENDING / UNCERTAIN
-function getRegime(vslope, rvol){
+function getRegime(vslope,rvol){
   if(vslope===null) return 'UNCERTAIN';
   const slopeFlat=Math.abs(vslope)<0.008;
   const rvolHigh=rvol!==null&&rvol>=2.0;
@@ -352,7 +263,6 @@ function getRegime(vslope, rvol){
   return 'UNCERTAIN';
 }
 
-// Color helpers
 function vsColor(vs){
   if(vs===null) return 'var(--t3)';
   const a=Math.abs(vs);
@@ -405,7 +315,6 @@ function process(raw,tf,k,ap){
   const v1=calcVWAP(raw),tc=agg(raw,tf),vt=smpVWAP(v1,tc,tf),at=calcATR(tc,ap);
   const todayStart=getTodayStartUTC();
 
-  // Display day fallback: if no candles today, use last trading day
   const hasTodayData=tc.some(c=>c.time>=todayStart);
   let displayStart=todayStart;
   if(!hasTodayData&&tc.length>0){
@@ -415,7 +324,7 @@ function process(raw,tf,k,ap){
 
   const cd=[],vl=[],ul=[],ll=[],vd=[];
   let ld=0,lv=0,la=0,lp=0,lu=0,lo=0,tv=0;
-  let prevSide=null, xf=0;
+  let prevSide=null,xf=0;
 
   for(let i=0;i<tc.length;i++){
     const c=tc[i],v=vt[i].value,a=at[i].value;
@@ -425,7 +334,6 @@ function process(raw,tf,k,ap){
     cd.push({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close});
     vd.push({time:c.time,value:c.volume,color:c.close>=c.open?'rgba(52,211,153,0.35)':'rgba(248,113,113,0.35)'});
 
-    // Attach vwap value for XF calculation
     tc[i]._vwap=v;
 
     if(isDisplay){
@@ -434,7 +342,6 @@ function process(raw,tf,k,ap){
       ll.push({time:c.time,value:dn});
       tv+=c.volume;
 
-      // VWAP cross frequency
       const side=c.close>v?1:-1;
       if(prevSide!==null&&side!==prevSide) xf++;
       prevSide=side;
@@ -443,7 +350,6 @@ function process(raw,tf,k,ap){
     ld=dev;lv=v;la=a;lp=c.close;lu=up;lo=dn;
   }
 
-  // Regime indicators — VSlope uses 1m VWAP (TF-independent)
   const v1mDisplay=v1.filter(p=>p.time>=displayStart);
   const vslope=calcVWAPSlope(v1mDisplay,la);
   const rvol=calcRVOL(tc,displayStart);
@@ -551,27 +457,26 @@ class Panel{
     this.us=this.ch.addLineSeries({color:t.dn+'b3',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
     this.ls=this.ch.addLineSeries({color:t.up+'b3',lineWidth:1,lineStyle:2,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
 
-    // Zone line series: [B1, B2, B3, A1, A2, A3]
-    // Bid = cyan/blue, Ask = orange/amber — distinct from ATR bands (red/green)
+    // Zone series: [buy_p75, buy_p90, buy_p95, sell_p75, sell_p90, sell_p95]
+    // Cyan = buy zones (support), Orange = sell zones (resistance)
     const zoneOpts=[
       {color:'rgba(34,211,238,0.85)',  lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(34,211,238,0.70)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(34,211,238,0.55)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(34,211,238,0.65)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(34,211,238,0.45)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
       {color:'rgba(251,146,60,0.85)',  lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(251,146,60,0.70)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
-      {color:'rgba(251,146,60,0.55)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(251,146,60,0.65)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
+      {color:'rgba(251,146,60,0.45)',  lineWidth:1, lineStyle:LightweightCharts.LineStyle.Dotted},
     ];
     this.zoneSeries=zoneOpts.map(o=>this.ch.addLineSeries({...o,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,title:''}));
 
-    // Ref line (pivot center)
+    // VWAP(9:00–9:30) reference line
     this.refSeries=this.ch.addLineSeries({color:'rgba(148,163,184,0.45)',lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,title:''});
 
-    // Scroll wheel zoom on price scale
     const chart=this.ch;
     let margins={top:0.06,bottom:0.22};
     el.addEventListener('wheel',e=>{
       const rect=el.getBoundingClientRect();
-      if(e.clientX < rect.right-55) return;
+      if(e.clientX<rect.right-55) return;
       e.preventDefault();
       const delta=e.deltaY>0?0.02:-0.02;
       margins.top=Math.max(0.01,Math.min(0.4,margins.top+delta));
@@ -598,10 +503,14 @@ class Panel{
 
   async load(){
     const data=await fetchLive(this.sym);
-    if(data&&data.length){this.raw=data;document.getElementById(`dt-${this.idx}`).className='dot dot-live';}
-    else{document.getElementById(`dt-${this.idx}`).className='dot dot-err';}
-    // Load zones (cached or computed — 1x per day per symbol)
-    if(!this.zones) this.zones=await loadZones(this.sym);
+    if(data&&data.length){
+      this.raw=data;
+      document.getElementById(`dt-${this.idx}`).className='dot dot-live';
+    }else{
+      document.getElementById(`dt-${this.idx}`).className='dot dot-err';
+    }
+    // Tính zones từ percentiles.json (cached) + VWAP930 từ raw data mới nhất
+    this.zones=await loadZones(this.sym,this.raw);
     this.render();
   }
 
@@ -610,7 +519,6 @@ class Panel{
     const{candles,vwapLine,upperLine,lowerLine,volData,displayStart,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
     const i=this.idx;
 
-    // Incremental update: setData first time, update() after
     if(!this._hasData){
       this.cs.setData(candles);
       this.vs.setData(volData);
@@ -618,13 +526,11 @@ class Panel{
         this.ws.setData(vwapLine);
         this.us.setData(upperLine);
         this.ls.setData(lowerLine);
-      } else {
-        this.ws.setData([]);
-        this.us.setData([]);
-        this.ls.setData([]);
+      }else{
+        this.ws.setData([]);this.us.setData([]);this.ls.setData([]);
       }
       this._hasData=true;
-    } else {
+    }else{
       if(candles.length){
         this.cs.update(candles[candles.length-1]);
         this.vs.update(volData[volData.length-1]);
@@ -633,10 +539,8 @@ class Panel{
         if(vwapLine.length) this.ws.update(vwapLine[vwapLine.length-1]);
         if(upperLine.length) this.us.update(upperLine[upperLine.length-1]);
         if(lowerLine.length) this.ls.update(lowerLine[lowerLine.length-1]);
-      } else {
-        this.ws.setData([]);
-        this.us.setData([]);
-        this.ls.setData([]);
+      }else{
+        this.ws.setData([]);this.us.setData([]);this.ls.setData([]);
       }
     }
 
@@ -648,18 +552,17 @@ class Panel{
     document.getElementById(`pc-${i}`).textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
     document.getElementById(`pc-${i}`).style.color=col;
 
-    // Metrics bar — left side
+    // Metrics bar
     document.getElementById(`mv-${i}`).textContent=m.vwap.toFixed(2);
     document.getElementById(`ma-${i}`).textContent=m.atr.toFixed(3);
     document.getElementById(`mV-${i}`).textContent=fmtVol(m.vol);
     document.getElementById(`mb-${i}`).textContent=m.lower.toFixed(2)+' – '+m.upper.toFixed(2);
 
-    // Metrics bar — regime section
     const rgEl=document.getElementById(`mrg-${i}`);
     rgEl.textContent=m.regime;
     rgEl.className='regime-lbl '+(
-      m.regime==='SIDEWAYS'  ? 'regime-sideways'  :
-      m.regime==='TRENDING' ? 'regime-trending' : 'regime-uncertain'
+      m.regime==='SIDEWAYS' ?'regime-sideways':
+      m.regime==='TRENDING'?'regime-trending':'regime-uncertain'
     );
 
     const vsEl=document.getElementById(`mer-${i}`);
@@ -674,7 +577,7 @@ class Panel{
     xfEl.textContent=m.xf;
     xfEl.style.color=xfColor(m.xf);
 
-    // DEV badge — dim when trending (signal less reliable)
+    // DEV badge
     const db=document.getElementById(`db-${i}`);
     const dev=m.dev;
     let z='NEUTRAL',dc='dev-neutral';
@@ -683,55 +586,64 @@ class Panel{
     db.className='dev-badge mono '+dc+(m.regime==='TRENDING'?' dimmed':'');
     db.innerHTML=`<small>${z}</small>${dev>=0?'+':''}${dev.toFixed(2)}`;
 
-    // Zone lines (display day)
-    if(this.zones && this.zoneSeries.length===6){
+    // ── Zone lines (percentile-based) ──────────────────────────────────
+    if(this.zones&&this.zoneSeries.length===6){
       const zn=this.zones;
       const displayCandles=candles.filter(c=>c.time>=displayStart);
       const tStart=displayCandles.length?displayCandles[0].time:displayStart;
-      const tEnd=displayCandles.length>1?displayCandles[displayCandles.length-1].time:(tStart+CFG.tf*60);
-      const prices=[zn.bid1,zn.bid2,zn.bid3,zn.ask1,zn.ask2,zn.ask3];
+      const tEnd=displayCandles.length>1
+        ?displayCandles[displayCandles.length-1].time
+        :(tStart+CFG.tf*60);
+
+      // [buy_p75, buy_p90, buy_p95, sell_p75, sell_p90, sell_p95]
+      const prices=[zn.buy_p75,zn.buy_p90,zn.buy_p95,zn.sell_p75,zn.sell_p90,zn.sell_p95];
+      const labels=['Bp75','Bp90','Bp95','Sp75','Sp90','Sp95'];
+      const mColors=['#22d3ee','#22d3ee','#22d3ee','#fb923c','#fb923c','#fb923c'];
       const zl=CFG.zoneLevel;
       const p=m.price;
 
       let showFlags=[false,false,false,false,false,false];
       if(zl===3){
         showFlags=[true,true,true,true,true,true];
-      } else if(zl===1){
+      }else if(zl===1){
+        // p75 = vùng quan trọng nhất (xác suất cao nhất bị chạm)
         showFlags=[true,false,false,true,false,false];
-      } else if(zl==='auto'){
+      }else if(zl==='auto'){
+        // Luôn hiện p75; mở rộng ra p90/p95 khi giá đã vượt ngưỡng trước
         showFlags[0]=true; showFlags[3]=true;
-        if(p<=zn.bid1) showFlags[1]=true;
-        if(p<=zn.bid2) showFlags[2]=true;
-        if(p>=zn.ask1) showFlags[4]=true;
-        if(p>=zn.ask2) showFlags[5]=true;
+        if(p<=zn.buy_p75)  showFlags[1]=true;
+        if(p<=zn.buy_p90)  showFlags[2]=true;
+        if(p>=zn.sell_p75) showFlags[4]=true;
+        if(p>=zn.sell_p90) showFlags[5]=true;
       }
+      // zl===0 → showFlags all false
 
-      const labels=['B1','B2','B3','A1','A2','A3'];
-      const mColors=['#22d3ee','#22d3ee','#22d3ee','#fb923c','#fb923c','#fb923c'];
       for(let j=0;j<6;j++){
-        if(showFlags[j] && tStart<tEnd){
+        if(showFlags[j]&&tStart<tEnd){
           this.zoneSeries[j].setData([{time:tStart,value:prices[j]},{time:tEnd,value:prices[j]}]);
           this.zoneSeries[j].setMarkers([{time:tStart,position:'inBar',color:mColors[j],shape:'circle',text:labels[j],size:0}]);
-        } else {
+        }else{
           this.zoneSeries[j].setData([]);
           this.zoneSeries[j].setMarkers([]);
         }
       }
 
-      if(zl!==0 && tStart<tEnd){
-        this.refSeries.setData([{time:tStart,value:zn.ref},{time:tEnd,value:zn.ref}]);
-        this.refSeries.setMarkers([{time:tStart,position:'inBar',color:'#94a3b8',shape:'circle',text:'Ref',size:0}]);
-      } else {
+      // VWAP(9:00–9:30) ref line
+      if(zl!==0&&tStart<tEnd){
+        this.refSeries.setData([{time:tStart,value:zn.vwap930},{time:tEnd,value:zn.vwap930}]);
+        this.refSeries.setMarkers([{time:tStart,position:'inBar',color:'#94a3b8',shape:'circle',text:'V930',size:0}]);
+      }else{
         this.refSeries.setData([]);
         this.refSeries.setMarkers([]);
       }
-    } else {
+    }else{
+      // Chưa có zones (trước 9:30, hoặc symbol chưa có trong percentiles.json)
       this.zoneSeries.forEach(s=>{s.setData([]);s.setMarkers([]);});
       this.refSeries.setData([]);
       this.refSeries.setMarkers([]);
     }
 
-    // Initial zoom — use displayStart (fallback aware)
+    // Initial zoom
     if(!this.initialized&&candles.length>0){
       this.initialized=true;
       let zoomIdx=candles.findIndex(c=>c.time>=displayStart);
@@ -772,7 +684,7 @@ document.getElementById('theme-toggle').addEventListener('click',()=>{
 if(typeof LightweightCharts==='undefined'){
   document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace;color:#94a3b8"><div><h2 style="color:#22d3ee">VWAP.MR</h2><p>Không load được chart library. Cần internet.</p></div></div>';
 }else{
-  for(let i=0;i<4;i++)panels.push(new Panel('c'+i,CFG.symbols[i],i));
+  for(let i=0;i<4;i++) panels.push(new Panel('c'+i,CFG.symbols[i],i));
   loadAll();startRefresh();
 }
 </script>
