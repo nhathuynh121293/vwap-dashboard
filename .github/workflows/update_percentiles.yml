@@ -2,7 +2,7 @@ name: Update Percentiles
 
 on:
   schedule:
-    - cron: '30 9 * * 1-5'   # 16:30 VN (UTC+7), thứ 2–6
+    - cron: '30 9 * * 1-5'   # 16:30 VN (UTC+7), thứ 2–6, sau khi phiên đóng
   workflow_dispatch:           # nút Run manual trên GitHub UI
 
 permissions:
@@ -21,11 +21,16 @@ jobs:
         with:
           python-version: '3.11'
 
+      # ── Cache key theo tuần: mỗi tuần tạo 1 entry mới, cũ tự expire sau 7 ngày ──
+      - name: Get week key
+        id: date
+        run: echo "week=$(date +'%Y-W%V')" >> $GITHUB_OUTPUT
+
       - name: Restore 1m CSV cache
         uses: actions/cache@v4
         with:
           path: data/vietstock/
-          key: vietstock-1m-${{ runner.os }}-${{ github.run_id }}
+          key: vietstock-1m-${{ runner.os }}-${{ steps.date.outputs.week }}
           restore-keys: |
             vietstock-1m-${{ runner.os }}-
 
@@ -41,4 +46,4 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/percentiles.json
           git diff --staged --quiet && echo "No changes to commit" || \
-            (git commit -m "chore: update percentiles [skip ci]" && git push)
+            (git commit -m "chore: update percentiles $(date +'%Y-%m-%d') [skip ci]" && git push)
