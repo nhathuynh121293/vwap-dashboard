@@ -1,14 +1,14 @@
 """
 build_percentiles.py — Build / Refresh VWAP(9:00-9:30) Percentile Zones
 =========================================================================
-Chạy trước morning_zones.py. Incremental: chỉ fetch ngày mới chưa có.
+Chạy incremental: chỉ fetch ngày mới chưa có, append vào CSV.
 
 Logic:
   1. Fetch 1m CSVs — incremental append (dùng lại fetch_vietstock.py)
   2. Mỗi ngày giao dịch: tính VWAP(9:00-9:30)
   3. Tính max_up% và max_down% từ VWAP suốt phiên (9:31 → 14:45)
      dùng cột high/low để capture đúng biên độ
-  4. Percentile p75/p90/p95 trên toàn bộ lịch sử đã có
+  4. Percentile p25/p50/p75/p90/p95 trên ROLLING_DAYS ngày gần nhất
   5. Ghi data/percentiles.json
 
 Usage:
@@ -49,7 +49,7 @@ VWAP_START  = dtime(9, 0)
 VWAP_END    = dtime(9, 30)
 SESSION_END = dtime(14, 45)
 
-# ── Watchlist (giống morning_zones.py) ──────────────────────────────────────
+# ── Watchlist ────────────────────────────────────────────────────────────────
 WATCHLIST = [
     "ACB", "BID", "CTG", "DGC", "FPT", "GAS", "GVR", "HDB", "HPG", "LPB",
     "MBB", "MSN", "MWG", "PLX", "SAB", "SHB", "SSI", "STB", "TCB",
@@ -58,7 +58,10 @@ WATCHLIST = [
 ]
 
 # ── Outlier filter: loại ngày circuit breaker / data lỗi ────────────────────
-MAX_MOVE_PCT = 15.0   # % — quá mức này là outlier
+MAX_MOVE_PCT = 8.0    # % — phù hợp HOSE circuit breaker ±7% (was 15.0)
+
+# ── Rolling window ────────────────────────────────────────────────────────────
+ROLLING_DAYS = 252    # Chỉ dùng 252 ngày giao dịch gần nhất để tính percentile
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -81,8 +84,8 @@ def compute_percentiles_for_symbol(symbol: str) -> dict | None:
 
     Returns:
         {
-          "up":   {"p75": ..., "p90": ..., "p95": ...},
-          "down": {"p75": ..., "p90": ..., "p95": ...},
+          "up":   {"p25": ..., "p50": ..., "p75": ..., "p90": ..., "p95": ...},
+          "down": {"p25": ..., "p50": ..., "p75": ..., "p90": ..., "p95": ...},
           "n_days": int,
         }
         hoặc None nếu không đủ data.
@@ -99,7 +102,12 @@ def compute_percentiles_for_symbol(symbol: str) -> dict | None:
     up_pcts: list[float] = []
     dn_pcts: list[float] = []
 
-    for date_str, bars in sorted(days.items()):
+    # ── Rolling window: chỉ giữ ROLLING_DAYS ngày giao dịch gần nhất ────
+    sorted_day_items = sorted(days.items())
+    if len(sorted_day_items) > ROLLING_DAYS:
+        sorted_day_items = sorted_day_items[-ROLLING_DAYS:]
+
+    for date_str, bars in sorted_day_items:
         vwap_bars:    list[dict] = []
         session_bars: list[dict] = []
 
@@ -110,11 +118,11 @@ def compute_percentiles_for_symbol(symbol: str) -> dict | None:
             elif VWAP_END < t <= SESSION_END:
                 session_bars.append(bar)
 
-        # Cần đủ cả hai window
-        if len(vwap_bars) < 5 or not session_bars:
+        # Cần đủ cả hai window (≥ 15 bars VWAP để đảm bảo chất lượng)
+        if len(vwap_bars) < 15 or not session_bars:
             continue
 
-        # ── VWAP(9:00-9:30): dùng close * volume (nhất quán với morning_zones) ──
+        # ── VWAP(9:00-9:30): close * volume ──────────────────────────────
         total_vol = sum(b["volume"] for b in vwap_bars)
         if total_vol > 0:
             vwap = sum(b["close"] * b["volume"] for b in vwap_bars) / total_vol
@@ -124,14 +132,14 @@ def compute_percentiles_for_symbol(symbol: str) -> dict | None:
         if vwap <= 0:
             continue
 
-        # ── Max up/down từ VWAP trong phiên: dùng high/low để capture biên độ ──
+        # ── Max up/down từ VWAP trong phiên: dùng high/low ───────────────
         session_high = max(b["high"] for b in session_bars)
         session_low  = min(b["low"]  for b in session_bars)
 
         up_pct = (session_high - vwap) / vwap * 100
         dn_pct = (vwap - session_low)  / vwap * 100
 
-        # ── Lọc outlier: circuit breaker / bad data ──────────────────────
+        # ── Lọc outlier ──────────────────────────────────────────────────
         if up_pct < 0 or dn_pct < 0:
             continue
         if up_pct > MAX_MOVE_PCT or dn_pct > MAX_MOVE_PCT:
@@ -148,11 +156,15 @@ def compute_percentiles_for_symbol(symbol: str) -> dict | None:
 
     return {
         "up": {
+            "p25": round(float(np.percentile(up, 25)), 4),
+            "p50": round(float(np.percentile(up, 50)), 4),
             "p75": round(float(np.percentile(up, 75)), 4),
             "p90": round(float(np.percentile(up, 90)), 4),
             "p95": round(float(np.percentile(up, 95)), 4),
         },
         "down": {
+            "p25": round(float(np.percentile(dn, 25)), 4),
+            "p50": round(float(np.percentile(dn, 50)), 4),
             "p75": round(float(np.percentile(dn, 75)), 4),
             "p90": round(float(np.percentile(dn, 90)), 4),
             "p95": round(float(np.percentile(dn, 95)), 4),
@@ -188,7 +200,9 @@ def main():
     print("  BUILD PERCENTILES")
     print("=" * 60)
     print(f"  Symbols  : {len(symbols)}")
+    print(f"  Rolling  : {ROLLING_DAYS} ngày giao dịch gần nhất")
     print(f"  Init days: {args.days}  (chỉ dùng khi CSV chưa có)")
+    print(f"  Max move : {MAX_MOVE_PCT}%  (outlier filter)")
     print(f"  Output   : {PERC_FILE}")
     print("=" * 60)
 
