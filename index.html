@@ -119,12 +119,16 @@ function getTickSize(sym,price){
   if(price<50)  return 0.05;   // 10k–50k VND
   return 0.10;                  // ≥50k VND
 }
-// roundAsk: sell zone → làm tròn LÊN (ceil) đến tick gần nhất
+// roundNearest: làm tròn về tick gần nhất (nearest) — dùng cho zone entry + ATR band
+function roundNearest(sym,price){
+  const tick=getTickSize(sym,price);
+  return Math.round(Math.round(price/tick*1e6)/1e6)*tick;
+}
+// roundAsk / roundBid — giữ lại, không dùng cho zones nữa
 function roundAsk(sym,price){
   const tick=getTickSize(sym,price);
   return Math.ceil(Math.round(price/tick*1e6)/1e6)*tick;
 }
-// roundBid: buy zone → làm tròn XUỐNG (floor) đến tick gần nhất
 function roundBid(sym,price){
   const tick=getTickSize(sym,price);
   return Math.floor(Math.round(price/tick*1e6)/1e6)*tick;
@@ -202,12 +206,12 @@ async function loadZones(sym,raw){
   const u=perc.up, dn=perc.down;
   return {
     vwap930:  +vwap930.toFixed(2),
-    buy_p75:  +roundBid(sym,vwap930*(1-dn.p75/100)).toFixed(2),
-    buy_p90:  +roundBid(sym,vwap930*(1-dn.p90/100)).toFixed(2),
-    buy_p95:  +roundBid(sym,vwap930*(1-dn.p95/100)).toFixed(2),
-    sell_p75: +roundAsk(sym,vwap930*(1+u.p75/100)).toFixed(2),
-    sell_p90: +roundAsk(sym,vwap930*(1+u.p90/100)).toFixed(2),
-    sell_p95: +roundAsk(sym,vwap930*(1+u.p95/100)).toFixed(2),
+    buy_p75:  +roundNearest(sym,vwap930*(1-dn.p75/100)).toFixed(2),
+    buy_p90:  +roundNearest(sym,vwap930*(1-dn.p90/100)).toFixed(2),
+    buy_p95:  +roundNearest(sym,vwap930*(1-dn.p95/100)).toFixed(2),
+    sell_p75: +roundNearest(sym,vwap930*(1+u.p75/100)).toFixed(2),
+    sell_p90: +roundNearest(sym,vwap930*(1+u.p90/100)).toFixed(2),
+    sell_p95: +roundNearest(sym,vwap930*(1+u.p95/100)).toFixed(2),
     _ndays:   perc.n_days,
   };
 }
@@ -347,7 +351,7 @@ function process(raw,tf,k,ap,sym){
 
   for(let i=0;i<tc.length;i++){
     const c=tc[i],v=vt[i].value,a=at[i].value;
-    const up=roundAsk(sym,v+k*a),dn=roundBid(sym,v-k*a),dev=a>0?(c.close-v)/a:0;
+    const up=roundNearest(sym,v+k*a),dn=roundNearest(sym,v-k*a),dev=a>0?(c.close-v)/a:0;
     const isDisplay=c.time>=displayStart;
 
     cd.push({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close});
