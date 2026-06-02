@@ -55,6 +55,8 @@ WATCHLIST = [
     "MBB", "MSN", "MWG", "PLX", "SAB", "SHB", "SSI", "STB", "TCB",
     "TPB", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VRE",
     "MCH", "TCX", "BSR", "POW", "KBC", "REE", "GEX", "VCI", "GMD", "PVS",
+    # Phái sinh
+    "VN30F1M",
 ]
 
 # ── Outlier filter: loại ngày circuit breaker / data lỗi ────────────────────

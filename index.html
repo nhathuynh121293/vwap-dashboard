@@ -54,7 +54,7 @@
   .grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:1px;height:calc(100vh - 46px);background:var(--grid-gap);}
   .cell{background:var(--bg0);display:flex;flex-direction:column;position:relative;overflow:hidden;}
   .cell-head{display:flex;align-items:center;justify-content:space-between;padding:5px 12px;background:var(--bg1);border-bottom:1px solid var(--border);height:36px;flex-shrink:0;}
-  .sym-input{width:58px;text-align:center;text-transform:uppercase;font-weight:700;background:var(--bg2);color:var(--t1);border:1px solid var(--border);padding:3px 5px;border-radius:4px;font-size:14px;outline:none;letter-spacing:.5px;}
+  .sym-input{width:76px;text-align:center;text-transform:uppercase;font-weight:700;background:var(--bg2);color:var(--t1);border:1px solid var(--border);padding:3px 5px;border-radius:4px;font-size:14px;outline:none;letter-spacing:.5px;}
   .sym-input:focus{border-color:var(--cyan);box-shadow:0 0 4px rgba(34,211,238,.2);}
   .price-info{display:flex;align-items:center;gap:12px;font-size:13px;}
   .price-main{font-weight:700;font-size:15px;}
@@ -110,6 +110,25 @@
 
 <script>
 const VN_OFFSET=7*3600;
+
+// ======== TICK ROUNDING ========
+// getTickSize: tick HOSE theo giá (nghìn VND), riêng VN30F* dùng 0.1 điểm
+function getTickSize(sym,price){
+  if(/^VN30F/i.test(sym)) return 0.1;
+  if(price<10)  return 0.01;   // <10k VND
+  if(price<50)  return 0.05;   // 10k–50k VND
+  return 0.10;                  // ≥50k VND
+}
+// roundAsk: sell zone → làm tròn LÊN (ceil) đến tick gần nhất
+function roundAsk(sym,price){
+  const tick=getTickSize(sym,price);
+  return Math.ceil(Math.round(price/tick*1e6)/1e6)*tick;
+}
+// roundBid: buy zone → làm tròn XUỐNG (floor) đến tick gần nhất
+function roundBid(sym,price){
+  const tick=getTickSize(sym,price);
+  return Math.floor(Math.round(price/tick*1e6)/1e6)*tick;
+}
 const DEFAULT_PROXY='https://proxy.nhathuynh1293.workers.dev';
 const CFG={symbols:['ACB','VCB','HPG','FPT'],k:2.0,tf:5,refresh:15,atrPeriod:14,zoneLevel:'auto',bandOn:true,proxy:localStorage.getItem('ssi-proxy')||DEFAULT_PROXY};
 
@@ -183,12 +202,12 @@ async function loadZones(sym,raw){
   const u=perc.up, dn=perc.down;
   return {
     vwap930:  +vwap930.toFixed(2),
-    buy_p75:  +(vwap930*(1-dn.p75/100)).toFixed(2),
-    buy_p90:  +(vwap930*(1-dn.p90/100)).toFixed(2),
-    buy_p95:  +(vwap930*(1-dn.p95/100)).toFixed(2),
-    sell_p75: +(vwap930*(1+u.p75/100)).toFixed(2),
-    sell_p90: +(vwap930*(1+u.p90/100)).toFixed(2),
-    sell_p95: +(vwap930*(1+u.p95/100)).toFixed(2),
+    buy_p75:  +roundBid(sym,vwap930*(1-dn.p75/100)).toFixed(2),
+    buy_p90:  +roundBid(sym,vwap930*(1-dn.p90/100)).toFixed(2),
+    buy_p95:  +roundBid(sym,vwap930*(1-dn.p95/100)).toFixed(2),
+    sell_p75: +roundAsk(sym,vwap930*(1+u.p75/100)).toFixed(2),
+    sell_p90: +roundAsk(sym,vwap930*(1+u.p90/100)).toFixed(2),
+    sell_p95: +roundAsk(sym,vwap930*(1+u.p95/100)).toFixed(2),
     _ndays:   perc.n_days,
   };
 }
@@ -311,7 +330,7 @@ function calcATR(d,p){
   return d.map((c,i)=>{let tr;if(i===0){tr=c.high-c.low;atr=tr;}else{const pc=d[i-1].close,gap=c.time-d[i-1].time;tr=gap>5400?(c.high-c.low):Math.max(c.high-c.low,Math.abs(c.high-pc),Math.abs(c.low-pc));atr=a*tr+(1-a)*atr;}return{time:c.time,value:atr};});
 }
 
-function process(raw,tf,k,ap){
+function process(raw,tf,k,ap,sym){
   const v1=calcVWAP(raw),tc=agg(raw,tf),vt=smpVWAP(v1,tc,tf),at=calcATR(tc,ap);
   const todayStart=getTodayStartUTC();
 
@@ -328,7 +347,7 @@ function process(raw,tf,k,ap){
 
   for(let i=0;i<tc.length;i++){
     const c=tc[i],v=vt[i].value,a=at[i].value;
-    const up=+(v+k*a).toFixed(2),dn=+(v-k*a).toFixed(2),dev=a>0?(c.close-v)/a:0;
+    const up=roundAsk(sym,v+k*a),dn=roundBid(sym,v-k*a),dev=a>0?(c.close-v)/a:0;
     const isDisplay=c.time>=displayStart;
 
     cd.push({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close});
@@ -414,7 +433,7 @@ class Panel{
     this.cell.innerHTML=`
 <div class="cell-head mono">
   <div style="display:flex;align-items:center;gap:8px">
-    <input class="sym-input mono" value="${this.sym}" maxlength="6" id="si-${i}">
+    <input class="sym-input mono" value="${this.sym}" maxlength="8" id="si-${i}">
     <span class="dot dot-live" id="dt-${i}"></span>
   </div>
   <div class="price-info mono">
@@ -516,7 +535,7 @@ class Panel{
 
   render(){
     if(!this.raw.length)return;
-    const{candles,vwapLine,upperLine,lowerLine,volData,displayStart,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod);
+    const{candles,vwapLine,upperLine,lowerLine,volData,displayStart,m}=process(this.raw,CFG.tf,CFG.k,CFG.atrPeriod,this.sym);
     const i=this.idx;
 
     if(!this._hasData){
